@@ -13,9 +13,18 @@ import {ResendOTPPasswordReset} from "./ResendOTPPasswordReset";
 export default Password<DataModel>({
     profile(params, ctx) {
         // `params` are the values sent from the frontend `signIn` call.
-        // Here we map the form fields to the fields in your `users` table.
+        // During sign-in, only email and password are provided.
+        // Only return full profile data during sign-up.
+        
+        // For sign-in, we don't need to return profile data
+        // The auth system will find the user by email
+        if (params.flow === "signIn") {
+            return {
+                email: params.email as string,
+            };
+        }
 
-
+        // For sign-up, return all profile fields
         return {
             email: params.email as string,
             firstName: params.firstName as string,
@@ -23,9 +32,6 @@ export default Password<DataModel>({
             username: params.username as string,
             role: params.role as ("therapist"|"parent"),
             childrenJson: params.childrenJson as string | undefined
-
-            // You could also add a default role or other fields here, for example:
-            // role: "member",
         };
     },
     // Add your email verification and password reset handlers here
