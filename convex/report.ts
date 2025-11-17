@@ -44,50 +44,71 @@ export const createReport = mutation({
         richTextContent: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
-        const therapistId = await getAuthUserId(ctx);
-        if (!therapistId) {
-            throw new Error("Not authenticated");
-        }
-        const user = await ctx.db.get(therapistId);
-        if (!user || user.role !== "therapist") {
-            throw new Error("User is not a therapist");
-        }
-
-        const now = Date.now();
-        const reportId = await ctx.db.insert("reports", {
-            childId: args.childId,
-            therapistId,
-            sessionId: args.sessionId,
-            text: args.text,
-            landmarks: args.landmarks,
-            emotionData: args.emotionData,
-            testResults: args.testResults,
-            richTextContent: args.richTextContent,
-            createdAt: now,
-            updatedAt: now,
-        });
-
-        // Create emotion observations for aggregation
-        const emotions = ["anger", "sadness", "anxiety", "fear", "happiness", "guilt"] as const;
-        for (const emotion of emotions) {
-            const intensity = args.emotionData[emotion];
-            if (intensity !== undefined && intensity > 0) {
-                await ctx.db.insert("emotionObservations", {
-                    reportId,
-                    childId: args.childId,
-                    emotion,
-                    intensity,
-                    observedAt: now,
-                });
+        try {
+            const therapistId = await getAuthUserId(ctx);
+            if (!therapistId) {
+                throw new Error("Not authenticated");
             }
+            const user = await ctx.db.get(therapistId);
+            if (!user || user.role !== "therapist") {
+                throw new Error("User is not a therapist");
+            }
+
+            // Validate child exists
+            const child = await ctx.db.get(args.childId);
+            if (!child) {
+                throw new Error(`Child with ID ${args.childId} not found`);
+            }
+
+            // Ensure emotionData is properly formatted (remove undefined values)
+            const cleanedEmotionData: Record<string, number | undefined> = {};
+            const emotions = ["anger", "sadness", "anxiety", "fear", "happiness", "guilt"] as const;
+            for (const emotion of emotions) {
+                const value = args.emotionData[emotion];
+                if (value !== undefined && value !== null && !isNaN(value)) {
+                    cleanedEmotionData[emotion] = value;
+                }
+            }
+
+            const now = Date.now();
+            const reportId = await ctx.db.insert("reports", {
+                childId: args.childId,
+                therapistId,
+                sessionId: args.sessionId,
+                text: args.text,
+                landmarks: args.landmarks,
+                emotionData: cleanedEmotionData,
+                testResults: args.testResults,
+                richTextContent: args.richTextContent,
+                createdAt: now,
+                updatedAt: now,
+            });
+
+            // Create emotion observations for aggregation
+            for (const emotion of emotions) {
+                const intensity = cleanedEmotionData[emotion];
+                if (intensity !== undefined && intensity > 0) {
+                    await ctx.db.insert("emotionObservations", {
+                        reportId,
+                        childId: args.childId,
+                        emotion,
+                        intensity,
+                        observedAt: now,
+                    });
+                }
+            }
+
+            // Update child's last evaluation date
+            await ctx.db.patch(args.childId, {
+                lastEvaluationDate: now,
+            });
+
+            return reportId;
+        } catch (error) {
+            console.error("Error creating report:", error);
+            console.error("Args received:", JSON.stringify(args, null, 2));
+            throw error;
         }
-
-        // Update child's last evaluation date
-        await ctx.db.patch(args.childId, {
-            lastEvaluationDate: now,
-        });
-
-        return reportId;
     },
 });
 
