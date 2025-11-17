@@ -98,7 +98,7 @@ export default function SignUpPage() {
 
         try {
             await signIn("password", formData);
-            navigate("/");
+            navigate("/therapist");
         } catch (e) {
             const friendlyMessage = e instanceof Error ? e.message : "Invalid verification code.";
             setError(friendlyMessage);

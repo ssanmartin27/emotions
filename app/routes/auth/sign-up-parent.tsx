@@ -139,7 +139,7 @@ export default function ParentSignUpPage() {
 
         try {
             await signIn('password', formData);
-            navigate('/');
+            navigate('/parent');
         } catch (e) {
             const friendlyMessage = e instanceof Error ? e.message : 'Invalid verification code.';
             setError(friendlyMessage);

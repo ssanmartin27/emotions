@@ -59,20 +59,23 @@ export default function LoginPage() {
                             let friendlyMessage = "An unexpected error occurred. Please try again.";
                             if (e instanceof Error) {
                                 const message = e.message;
+                                // Check for Convex server error format: [CONVEX A(auth:signIn)] [Request ID: ...] Server Error
+                                const isConvexServerError = /\[CONVEX A\(auth:signIn\)\].*Server Error/i.test(message);
+                                
                                 // Show specific error messages for authentication failures
                                 if (message.includes("InvalidSecret")) {
                                     friendlyMessage = "Incorrect password. Please try again.";
                                 } else if (message.includes("InvalidAccountId") ||
                                           message.includes("account not found") ||
                                           message.includes("user not found") ||
-                                          message.includes("no account")) {
+                                          message.includes("no account") ||
+                                          isConvexServerError) {
+                                    // Convex server error when email not found typically means account doesn't exist
                                     friendlyMessage = "No account found with this email address. Please check your email or sign up.";
                                 } else if (message.includes("invalid credentials") ||
                                           message.includes("authentication failed")) {
                                     friendlyMessage = "Invalid email or password. Please try again.";
-                                } else if (message.includes("server error") || 
-                                          message.includes("internal error") ||
-                                          (message.includes("convex") && message.toLowerCase().includes("server error"))) {
+                                } else if (message.toLowerCase().includes("server error") && !isConvexServerError) {
                                     friendlyMessage = "A server error occurred. Please try again later.";
                                 } else {
                                     // For other errors, show the actual error message

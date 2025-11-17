@@ -112,7 +112,7 @@ export default function Home() {
 
     return (
         <>
-            <SiteHeader />
+            <SiteHeader user={user} />
             <div className="relative mx-auto my-10 max-w-7xl flex-col items-center justify-center">
                 <IconCloudBackground />
 
