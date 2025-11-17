@@ -1,0 +1,798 @@
+"use client"
+
+import { useEffect, useRef, useState, useCallback } from "react"
+import { FilesetResolver, FaceLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision"
+import { calculateAUs } from "~/utils/mediapipe-aus"
+import { Button } from "~/components/ui/button"
+import { Progress } from "~/components/ui/progress"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
+import { Upload, X, Play, Pause } from "lucide-react"
+
+export interface LandmarkData {
+    frame: number
+    timestamp: number
+    faceLandmarks: number[]
+    poseLandmarks: number[] // Will be empty for now, pose detection can be added separately if needed
+    aus: {
+        AU01: number
+        AU02: number
+        AU04: number
+        AU05: number
+        AU06: number
+        AU07: number
+        AU12: number
+        AU14: number
+        AU15: number
+        AU17: number
+        AU20: number
+        AU25: number
+    }
+}
+
+interface VideoProcessorProps {
+    onLandmarksExtracted: (landmarks: LandmarkData[]) => void
+    onError?: (error: Error) => void
+}
+
+export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessorProps) {
+    const videoRef = useRef<HTMLVideoElement>(null)
+    const canvasRef = useRef<HTMLCanvasElement>(null)
+    const faceLandmarkerRef = useRef<FaceLandmarker | null>(null)
+    const poseLandmarkerRef = useRef<PoseLandmarker | null>(null)
+    const animationFrameRef = useRef<number | null>(null)
+    
+    const [videoFile, setVideoFile] = useState<File | null>(null)
+    const [isProcessing, setIsProcessing] = useState(false)
+    const [progress, setProgress] = useState(0)
+    const [isPlaying, setIsPlaying] = useState(false)
+    const [landmarks, setLandmarks] = useState<LandmarkData[]>([])
+    const [currentFrame, setCurrentFrame] = useState(0)
+    const [totalFrames, setTotalFrames] = useState(0)
+    const [isInitialized, setIsInitialized] = useState(false)
+    const lastTimestampRef = useRef<number>(0)
+    const processedLandmarksRef = useRef<LandmarkData[]>([])
+    const poseTimestampRef = useRef<number>(0)
+    const [currentPoseData, setCurrentPoseData] = useState<{
+        landmarksCount: number
+        visibility: number
+        detected: boolean
+    } | null>(null)
+
+    // Initialize MediaPipe Face Landmarker and Pose Landmarker
+    useEffect(() => {
+        let isMounted = true
+
+        const initializeLandmarkers = async () => {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+                )
+
+                // Initialize Face Landmarker
+                const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "/models/face_landmarker.task",
+                        delegate: "GPU",
+                    },
+                    outputFaceBlendshapes: true,
+                    runningMode: "VIDEO" as const,
+                    numFaces: 1,
+                    minFaceDetectionConfidence: 0.5,
+                    minFacePresenceConfidence: 0.5,
+                    minTrackingConfidence: 0.5,
+                })
+
+                // Initialize Pose Landmarker
+                // Try GPU first, fallback to CPU if needed
+                let poseLandmarker: PoseLandmarker
+                try {
+                    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                        baseOptions: {
+                            modelAssetPath: "/models/pose_landmarker.task",
+                            delegate: "GPU",
+                        },
+                    runningMode: "VIDEO" as const,
+                    numPoses: 1,
+                    minPoseDetectionConfidence: 0.1, // Very low threshold for better detection
+                    minPosePresenceConfidence: 0.1, // Very low threshold for better detection
+                    minTrackingConfidence: 0.1, // Very low threshold for better detection
+                    })
+                    console.log("Pose Landmarker initialized with GPU")
+                } catch (gpuError) {
+                    console.warn("GPU initialization failed, trying CPU:", gpuError)
+                    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                        baseOptions: {
+                            modelAssetPath: "/models/pose_landmarker.task",
+                            delegate: "CPU",
+                        },
+                        runningMode: "VIDEO" as const,
+                        numPoses: 1,
+                        minPoseDetectionConfidence: 0.1,
+                        minPosePresenceConfidence: 0.1,
+                        minTrackingConfidence: 0.1,
+                    })
+                    console.log("Pose Landmarker initialized with CPU")
+                }
+
+                if (isMounted) {
+                    faceLandmarkerRef.current = faceLandmarker
+                    poseLandmarkerRef.current = poseLandmarker
+                    setIsInitialized(true)
+                }
+            } catch (error) {
+                console.error("Error initializing Landmarkers:", error)
+                if (onError) {
+                    onError(error as Error)
+                }
+            }
+        }
+
+        initializeLandmarkers()
+
+        return () => {
+            isMounted = false
+            if (faceLandmarkerRef.current) {
+                faceLandmarkerRef.current.close()
+            }
+            if (poseLandmarkerRef.current) {
+                poseLandmarkerRef.current.close()
+            }
+        }
+    }, [onError])
+
+    // Handle video file selection
+    const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (file && file.type.startsWith("video/")) {
+            setVideoFile(file)
+            setLandmarks([])
+            setProgress(0)
+            setCurrentFrame(0)
+        }
+    }, [])
+
+    // Draw pose landmarks on canvas
+    const drawPoseLandmarks = useCallback((ctx: CanvasRenderingContext2D, poseLandmarks: any[], canvasWidth: number, canvasHeight: number) => {
+        if (!poseLandmarks || poseLandmarks.length === 0) return
+
+        // Pose connections (MediaPipe Pose has 33 landmarks)
+        // Standard MediaPipe Pose skeleton connections - full body skeleton
+        const poseConnections = [
+            // Face outline
+            [0, 1], [1, 2], [2, 3], [3, 7],
+            // Torso (shoulders and core)
+            [11, 12], // Left shoulder to right shoulder
+            [11, 23], // Left shoulder to left hip
+            [12, 24], // Right shoulder to right hip
+            [23, 24], // Left hip to right hip
+            // Left arm
+            [11, 13], // Left shoulder to left elbow
+            [13, 15], // Left elbow to left wrist
+            [15, 17], [15, 19], [15, 21], [17, 19], // Left hand connections
+            // Right arm
+            [12, 14], // Right shoulder to right elbow
+            [14, 16], // Right elbow to right wrist
+            [16, 18], [16, 20], [16, 22], [18, 20], // Right hand connections
+            // Left leg
+            [23, 25], // Left hip to left knee
+            [25, 27], // Left knee to left ankle
+            [27, 29], [29, 31], [27, 31], // Left foot connections
+            // Right leg
+            [24, 26], // Right hip to right knee
+            [26, 28], // Right knee to right ankle
+            [28, 30], [30, 32], [28, 32], // Right foot connections
+        ]
+
+        // Draw pose connections (skeleton) - make them more visible
+        ctx.strokeStyle = "#00FFFF"
+        ctx.lineWidth = 4
+        ctx.globalAlpha = 0.9
+
+        poseConnections.forEach(([startIdx, endIdx]) => {
+            if (startIdx < poseLandmarks.length && endIdx < poseLandmarks.length && poseLandmarks[startIdx] && poseLandmarks[endIdx]) {
+                const start = poseLandmarks[startIdx]
+                const end = poseLandmarks[endIdx]
+                // Lower visibility threshold to show more connections
+                if (start.visibility && end.visibility && start.visibility > 0.3 && end.visibility > 0.3) {
+                    ctx.beginPath()
+                    ctx.moveTo(start.x * canvasWidth, start.y * canvasHeight)
+                    ctx.lineTo(end.x * canvasWidth, end.y * canvasHeight)
+                    ctx.stroke()
+                }
+            }
+        })
+
+        ctx.globalAlpha = 1.0
+
+        // Draw pose landmark points - make them more visible
+        // Draw all landmarks, but use different colors based on visibility
+        poseLandmarks.forEach((landmark, idx) => {
+            if (landmark && landmark.x !== undefined && landmark.y !== undefined && landmark.visibility) {
+                // Lower visibility threshold to show more points
+                if (landmark.visibility > 0.3) {
+                    // Use brighter color for high visibility, dimmer for lower
+                    const alpha = Math.min(1, landmark.visibility * 1.5)
+                    ctx.fillStyle = `rgba(0, 255, 255, ${alpha})`
+                    ctx.beginPath()
+                    ctx.arc(landmark.x * canvasWidth, landmark.y * canvasHeight, 5, 0, 2 * Math.PI)
+                    ctx.fill()
+                    // Add a white outline for better visibility
+                    ctx.strokeStyle = "#FFFFFF"
+                    ctx.lineWidth = 1
+                    ctx.stroke()
+                }
+            }
+        })
+    }, [])
+
+    // Draw landmarks on canvas with proper face mesh
+    const drawLandmarks = useCallback((ctx: CanvasRenderingContext2D, faceLandmarks: any[], canvasWidth: number, canvasHeight: number) => {
+        if (!faceLandmarks || faceLandmarks.length === 0) return
+
+        // Face mesh tesselation connections (key connections for face mesh visualization)
+        // These are the main connections that create the face mesh
+        const faceMeshConnections = [
+            // Face outline
+            [10, 338], [338, 297], [297, 332], [332, 284], [284, 251], [251, 389], [389, 356], [356, 454], [454, 323], [323, 361], [361, 288], [288, 397], [397, 365], [365, 379], [379, 378], [378, 400], [400, 377], [377, 152], [152, 148], [148, 176], [176, 149], [149, 150], [150, 136], [136, 172], [172, 58], [58, 132], [132, 93], [93, 234], [234, 127], [127, 162], [162, 21], [21, 54], [54, 103], [103, 67], [67, 109], [109, 10],
+            // Left eyebrow
+            [107, 66], [66, 105], [105, 63], [63, 70], [70, 156], [156, 143], [143, 35], [35, 31], [31, 228], [228, 229], [229, 230], [230, 231], [231, 232], [232, 233], [233, 244], [244, 245], [245, 122], [122, 6], [6, 141], [141, 36], [36, 107],
+            // Right eyebrow
+            [336, 296], [296, 334], [334, 293], [293, 300], [300, 276], [276, 283], [283, 282], [282, 295], [295, 285], [285, 336],
+            // Left eye
+            [33, 7], [7, 163], [163, 144], [144, 145], [145, 153], [153, 154], [154, 155], [155, 133], [133, 173], [173, 157], [157, 158], [158, 159], [159, 160], [160, 161], [161, 246], [246, 33],
+            // Right eye
+            [263, 249], [249, 390], [390, 373], [373, 374], [374, 380], [380, 381], [381, 382], [382, 362], [362, 398], [398, 384], [384, 385], [385, 386], [386, 387], [387, 388], [388, 466], [466, 263],
+            // Nose
+            [1, 2], [2, 98], [98, 327], [327, 326], [326, 2], [2, 97], [97, 326], [326, 2], [2, 3], [3, 51], [51, 48], [48, 115], [115, 131], [131, 134], [134, 102], [102, 49], [49, 220], [220, 305], [305, 289], [289, 305], [305, 290], [290, 305], [305, 4], [4, 5], [5, 195], [195, 197], [197, 196], [196, 3],
+            // Mouth
+            [61, 146], [146, 91], [91, 181], [181, 84], [84, 17], [17, 314], [314, 405], [405, 320], [320, 307], [307, 375], [375, 321], [321, 308], [308, 324], [324, 318], [318, 13], [13, 82], [82, 81], [81, 80], [80, 78], [78, 95], [95, 88], [88, 178], [178, 87], [87, 14], [14, 317], [317, 402], [402, 318], [318, 324], [324, 308], [308, 307], [307, 375], [375, 321], [321, 308], [308, 324], [324, 318], [318, 13], [13, 82], [82, 81], [81, 80], [80, 78], [78, 95], [95, 88], [88, 178], [178, 87], [87, 14], [14, 317], [317, 402], [402, 318], [318, 324], [324, 308], [308, 307], [307, 375], [375, 321], [321, 308], [308, 324], [324, 318], [318, 13], [13, 82], [82, 81], [81, 80], [80, 78], [78, 95], [95, 88], [88, 178], [178, 87], [87, 14], [14, 317], [317, 402], [402, 318], [318, 324], [324, 308], [308, 307], [307, 375], [375, 321], [321, 308], [308, 324], [324, 318], [318, 13], [13, 82], [82, 81], [81, 80], [80, 78], [78, 95], [95, 88], [88, 178], [178, 87], [87, 14], [14, 317], [317, 402], [402, 61],
+        ]
+
+        // Draw face mesh connections - make them more visible
+        ctx.strokeStyle = "#00FF00"
+        ctx.lineWidth = 2
+        ctx.globalAlpha = 0.8
+        
+        faceMeshConnections.forEach(([startIdx, endIdx]) => {
+            if (startIdx < faceLandmarks.length && endIdx < faceLandmarks.length && faceLandmarks[startIdx] && faceLandmarks[endIdx]) {
+                const start = faceLandmarks[startIdx]
+                const end = faceLandmarks[endIdx]
+                ctx.beginPath()
+                ctx.moveTo(start.x * canvasWidth, start.y * canvasHeight)
+                ctx.lineTo(end.x * canvasWidth, end.y * canvasHeight)
+                ctx.stroke()
+            }
+        })
+        
+        ctx.globalAlpha = 1.0
+
+        // Draw all landmark points - make them more visible
+        ctx.fillStyle = "#FF0000"
+        faceLandmarks.forEach((landmark, idx) => {
+            if (landmark && landmark.x !== undefined && landmark.y !== undefined) {
+                ctx.beginPath()
+                ctx.arc(landmark.x * canvasWidth, landmark.y * canvasHeight, 3, 0, 2 * Math.PI)
+                ctx.fill()
+            }
+        })
+    }, [])
+
+    // Process video frame
+    const processFrame = useCallback(async () => {
+        if (!videoRef.current || !canvasRef.current || !faceLandmarkerRef.current || !poseLandmarkerRef.current || !isInitialized) {
+            return
+        }
+
+        const video = videoRef.current
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext("2d")
+        if (!ctx) return
+
+        // Set canvas size to match video
+        canvas.width = video.videoWidth || 640
+        canvas.height = video.videoHeight || 480
+
+        // Draw current video frame
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+        const frameNumber = Math.floor(video.currentTime * 30) // Assume 30 FPS
+        const timestamp = video.currentTime
+
+        try {
+            // Detect face landmarks - timestamps must be strictly monotonically increasing
+            // Use a counter that always increases, not video.currentTime which can reset
+            const baseTimestamp = Math.floor(video.currentTime * 1000)
+            // Ensure timestamp is always greater than the last one
+            const timestampMs = Math.max(lastTimestampRef.current + 1, baseTimestamp)
+            lastTimestampRef.current = timestampMs
+            
+            const results = faceLandmarkerRef.current.detectForVideo(video, timestampMs)
+
+            // Detect pose landmarks
+            // Use canvas ImageData instead of video element for better compatibility
+            const poseTimestampMs = Math.max(poseTimestampRef.current + 1, Math.floor(video.currentTime * 1000))
+            poseTimestampRef.current = poseTimestampMs
+            
+            // Ensure video is ready
+            // if (video.readyState < 2) {
+            //     console.warn(`Frame ${frameNumber}: Video not ready (readyState: ${video.readyState})`) // Disabled for performance
+            // }
+            
+            let poseResults
+            try {
+                // Try using canvas first (more reliable)
+                poseResults = poseLandmarkerRef.current.detectForVideo(canvas, poseTimestampMs)
+            } catch (canvasError) {
+                // console.warn(`Frame ${frameNumber}: Canvas detection failed, trying video element:`, canvasError) // Disabled for performance
+                try {
+                    poseResults = poseLandmarkerRef.current.detectForVideo(video, poseTimestampMs)
+                } catch (videoError) {
+                    // console.error(`Frame ${frameNumber}: Both canvas and video detection failed:`, videoError) // Disabled for performance
+                    poseResults = { landmarks: null, worldLandmarks: null }
+                }
+            }
+
+            // Debug logging disabled for performance - enable only when debugging
+            // if (frameNumber < 5 || frameNumber % 30 === 0) {
+            //     console.log(`Frame ${frameNumber}: Pose detection results:`, {...})
+            // }
+
+            let poseLandmarksArray: number[] = []
+            // Check for pose landmarks - MediaPipe uses 'landmarks' not 'poseLandmarks'
+            const hasPoses = poseResults.landmarks && poseResults.landmarks.length > 0
+            
+            if (hasPoses) {
+                const poseLandmarks = poseResults.landmarks[0]
+                // console.log(`Frame ${frameNumber}: Detected ${poseLandmarks.length} pose landmarks`) // Disabled for performance
+
+                // Draw pose landmarks on canvas
+                drawPoseLandmarks(ctx, poseLandmarks, canvas.width, canvas.height)
+
+                // Calculate average visibility
+                const avgVisibility = poseLandmarks.reduce((sum, lm) => sum + (lm.visibility || 0), 0) / poseLandmarks.length
+
+                // Update pose data state for display
+                setCurrentPoseData({
+                    landmarksCount: poseLandmarks.length,
+                    visibility: avgVisibility,
+                    detected: true,
+                })
+
+                // Store pose landmarks
+                poseLandmarksArray = poseLandmarks.flatMap((lm) => [
+                    lm.x,
+                    lm.y,
+                    lm.z || 0,
+                    lm.visibility || 0
+                ])
+            } else {
+                // Debug logging disabled for performance
+                // if (frameNumber < 5 || frameNumber % 30 === 0) {
+                //     console.warn(`Frame ${frameNumber}: No pose detected`, {...})
+                // }
+                setCurrentPoseData({
+                    landmarksCount: 0,
+                    visibility: 0,
+                    detected: false,
+                })
+            }
+
+            // Process face landmarks
+            let faceLandmarksArray: { x: number; y: number; z: number }[] = []
+            let aus = {
+                AU01: 0, AU02: 0, AU04: 0, AU05: 0, AU06: 0, AU07: 0,
+                AU12: 0, AU14: 0, AU15: 0, AU17: 0, AU20: 0, AU25: 0,
+            }
+            let faceLandmarksFlat: number[] = []
+
+                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                    const faceLandmarks = results.faceLandmarks[0]
+                    // console.log(`Frame ${frameNumber}: Detected ${faceLandmarks.length} face landmarks`) // Disabled for performance
+
+                // Draw face landmarks on canvas
+                drawLandmarks(ctx, faceLandmarks, canvas.width, canvas.height)
+
+                // Convert to our format for AU calculation
+                faceLandmarksArray = faceLandmarks.map((lm) => ({
+                    x: lm.x * canvas.width,
+                    y: lm.y * canvas.height,
+                    z: lm.z * canvas.width, // z is normalized by width
+                }))
+
+                // Calculate AUs from landmarks
+                aus = calculateAUs(faceLandmarksArray)
+                faceLandmarksFlat = faceLandmarks.flatMap((lm) => [lm.x, lm.y, lm.z])
+            }
+
+            // Create landmark data (even if one or both are missing)
+            const landmarkData: LandmarkData = {
+                frame: frameNumber,
+                timestamp,
+                faceLandmarks: faceLandmarksFlat,
+                poseLandmarks: poseLandmarksArray,
+                aus,
+            }
+
+            setLandmarks((prev) => {
+                const updated = [...prev]
+                // Update or add frame data
+                const existingIndex = updated.findIndex((l) => l.frame === frameNumber)
+                if (existingIndex >= 0) {
+                    updated[existingIndex] = landmarkData
+                } else {
+                    updated.push(landmarkData)
+                }
+                const sorted = updated.sort((a, b) => a.frame - b.frame)
+                // Update ref for completion handler
+                processedLandmarksRef.current = sorted
+                return sorted
+            })
+
+            setCurrentFrame(frameNumber)
+        } catch (error) {
+            console.error("Error processing frame:", error)
+            if (onError) {
+                onError(error as Error)
+            }
+        }
+    }, [isInitialized, drawLandmarks, drawPoseLandmarks, onError])
+
+    // Process entire video
+    const processVideo = useCallback(async () => {
+        if (!videoRef.current || !videoFile || !isInitialized) return
+
+        setIsProcessing(true)
+        setProgress(0)
+        setLandmarks([])
+
+        const video = videoRef.current
+        const fps = 30
+        const frameDuration = 1 / fps
+        const totalFrames = Math.floor(video.duration * fps)
+        
+        video.currentTime = 0
+        video.pause() // Don't play, just seek through frames
+        
+        // Reset timestamp counters for new video processing
+        lastTimestampRef.current = 0
+        poseTimestampRef.current = 0
+
+        let currentFrame = 0
+        processedLandmarksRef.current = [] // Reset for new processing
+
+        const processNextFrame = async () => {
+            if (currentFrame >= totalFrames || video.currentTime >= video.duration) {
+                setIsProcessing(false)
+                // Show a frame with landmarks (use middle frame for better visibility)
+                if (videoRef.current && canvasRef.current && processedLandmarksRef.current.length > 0) {
+                    const video = videoRef.current
+                    const canvas = canvasRef.current
+                    const ctx = canvas.getContext("2d")
+                    if (ctx && faceLandmarkerRef.current) {
+                        // Show middle frame with landmarks
+                        const middleFrame = processedLandmarksRef.current[Math.floor(processedLandmarksRef.current.length / 2)]
+                        video.currentTime = middleFrame.timestamp
+                        await new Promise<void>((resolve) => {
+                            const handleSeeked = () => {
+                                video.removeEventListener("seeked", handleSeeked)
+                                resolve()
+                            }
+                            video.addEventListener("seeked", handleSeeked)
+                        })
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+                        // Redetect to draw landmarks
+                        try {
+                            const timestampMs = Math.max(lastTimestampRef.current + 1, Math.floor(video.currentTime * 1000))
+                            lastTimestampRef.current = timestampMs
+                            const poseTimestampMs = Math.max(poseTimestampRef.current + 1, timestampMs)
+                            poseTimestampRef.current = poseTimestampMs
+                            
+                            const faceResults = faceLandmarkerRef.current.detectForVideo(video, timestampMs)
+                            const poseResults = poseLandmarkerRef.current.detectForVideo(video, poseTimestampMs)
+                            
+                            if (faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) {
+                                // console.log("Drawing final frame with face landmarks") // Disabled for performance
+                                drawLandmarks(ctx, faceResults.faceLandmarks[0], canvas.width, canvas.height)
+                            }
+                            if (poseResults.landmarks && poseResults.landmarks.length > 0) {
+                                // console.log("Drawing final frame with pose landmarks") // Disabled for performance
+                                drawPoseLandmarks(ctx, poseResults.landmarks[0], canvas.width, canvas.height)
+                            }
+                        } catch (e) {
+                            // console.error("Error redrawing landmarks:", e) // Disabled for performance
+                        }
+                    }
+                }
+                video.currentTime = 0
+                return
+            }
+
+            // Seek to the frame time
+            video.currentTime = currentFrame * frameDuration
+            
+            // Wait for seek to complete
+            await new Promise<void>((resolve) => {
+                const handleSeeked = () => {
+                    video.removeEventListener("seeked", handleSeeked)
+                    resolve()
+                }
+                video.addEventListener("seeked", handleSeeked)
+            })
+
+            // Process the frame (this already draws landmarks on canvas)
+            await processFrame()
+            
+            currentFrame++
+            setProgress((currentFrame / totalFrames) * 100)
+            setCurrentFrame(currentFrame)
+
+            // Process next frame with a small delay to avoid blocking
+            setTimeout(processNextFrame, 10)
+        }
+
+        // Start processing
+        processNextFrame()
+    }, [videoFile, processFrame, isInitialized])
+
+    // Handle play/pause
+    const togglePlayPause = useCallback(() => {
+        if (!videoRef.current) return
+
+        if (isPlaying) {
+            videoRef.current.pause()
+            setIsPlaying(false)
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+            }
+        } else {
+            videoRef.current.play()
+            setIsPlaying(true)
+            
+            // Process frames while playing
+            const processLoop = async () => {
+                if (videoRef.current && !videoRef.current.paused && !videoRef.current.ended) {
+                    await processFrame()
+                    animationFrameRef.current = requestAnimationFrame(processLoop)
+                } else {
+                    setIsPlaying(false)
+                }
+            }
+            processLoop()
+        }
+    }, [isPlaying, processFrame])
+
+    // Load and display video when file is selected
+    useEffect(() => {
+        if (videoFile && videoRef.current && canvasRef.current) {
+            const video = videoRef.current
+            const canvas = canvasRef.current
+            const ctx = canvas.getContext("2d")
+            
+            const url = URL.createObjectURL(videoFile)
+            video.src = url
+            video.load()
+            
+            const handleLoadedMetadata = () => {
+                if (video && canvas && ctx) {
+                    canvas.width = video.videoWidth || 640
+                    canvas.height = video.videoHeight || 480
+                    
+                    // Draw first frame
+                    video.currentTime = 0.1 // Small offset to ensure frame is loaded
+                    const handleSeeked = () => {
+                        if (ctx && video) {
+                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+                        }
+                        video.removeEventListener("seeked", handleSeeked)
+                    }
+                    video.addEventListener("seeked", handleSeeked)
+                    
+                    const fps = 30
+                    const duration = video.duration
+                    setTotalFrames(Math.floor(duration * fps))
+                }
+            }
+            
+            video.addEventListener("loadedmetadata", handleLoadedMetadata)
+            
+            return () => {
+                video.removeEventListener("loadedmetadata", handleLoadedMetadata)
+                URL.revokeObjectURL(url)
+            }
+        }
+    }, [videoFile])
+
+    // Cleanup
+    useEffect(() => {
+        return () => {
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+            }
+        }
+    }, [])
+
+    // Notify parent when landmarks are ready
+    useEffect(() => {
+        if (landmarks.length > 0 && !isProcessing) {
+            onLandmarksExtracted(landmarks)
+        }
+    }, [landmarks, isProcessing, onLandmarksExtracted])
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Video Processing</CardTitle>
+                <CardDescription>
+                    Upload a video to extract facial landmarks and pose data
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                {!isInitialized && (
+                    <div className="text-sm text-muted-foreground">
+                        Initializing MediaPipe Face Landmarker...
+                    </div>
+                )}
+                {!videoFile ? (
+                    <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                        <input
+                            type="file"
+                            accept="video/*"
+                            onChange={handleFileSelect}
+                            className="hidden"
+                            id="video-upload"
+                        />
+                        <label
+                            htmlFor="video-upload"
+                            className="cursor-pointer flex flex-col items-center gap-2"
+                        >
+                            <Upload className="w-12 h-12 text-muted-foreground" />
+                            <span className="text-sm font-medium">Click to upload video</span>
+                            <span className="text-xs text-muted-foreground">
+                                Supports MP4, WebM, and other video formats
+                            </span>
+                        </label>
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium">{videoFile.name}</span>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => {
+                                        setVideoFile(null)
+                                        setLandmarks([])
+                                        setProgress(0)
+                                        setCurrentFrame(0)
+                                        if (videoRef.current) {
+                                            videoRef.current.src = ""
+                                        }
+                                    }}
+                                >
+                                    <X className="w-4 h-4" />
+                                </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    type="button"
+                                    onClick={togglePlayPause}
+                                    disabled={isProcessing || !isInitialized}
+                                    size="sm"
+                                >
+                                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    onClick={processVideo}
+                                    disabled={isProcessing || !isInitialized}
+                                    size="sm"
+                                >
+                                    {isProcessing ? "Processing..." : "Process Video"}
+                                </Button>
+                            </div>
+                        </div>
+
+                        {isProcessing && (
+                            <div className="space-y-2">
+                                <Progress value={progress} />
+                                <p className="text-xs text-muted-foreground text-center">
+                                    Processing frame {currentFrame} of {totalFrames} ({Math.round(progress)}%)
+                                </p>
+                                
+                                {/* Show pose data during processing */}
+                                {currentPoseData && (
+                                    <div className="grid grid-cols-3 gap-2 p-3 bg-muted/50 rounded-lg text-xs">
+                                        <div>
+                                            <div className="text-muted-foreground mb-0.5">Pose</div>
+                                            <div className="font-semibold">
+                                                {currentPoseData.detected ? (
+                                                    <span className="text-green-600">✓</span>
+                                                ) : (
+                                                    <span className="text-gray-400">✗</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {currentPoseData.detected && (
+                                            <>
+                                                <div>
+                                                    <div className="text-muted-foreground mb-0.5">Points</div>
+                                                    <div className="font-semibold">{currentPoseData.landmarksCount}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-muted-foreground mb-0.5">Visibility</div>
+                                                    <div className="font-semibold">{(currentPoseData.visibility * 100).toFixed(0)}%</div>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="relative">
+                            <video
+                                ref={videoRef}
+                                className="w-full rounded-lg"
+                                style={{ display: "none" }}
+                                playsInline
+                            />
+                            <canvas
+                                ref={canvasRef}
+                                className="w-full rounded-lg border"
+                                style={{ maxHeight: "500px", objectFit: "contain" }}
+                            />
+                        </div>
+
+                        {landmarks.length > 0 && (
+                            <div className="space-y-2">
+                                <div className="text-sm text-muted-foreground">
+                                    Extracted {landmarks.length} frames with landmarks
+                                </div>
+                                
+                                {/* Pose Data Display */}
+                                {currentPoseData && (
+                                    <div className="grid grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg">
+                                        <div>
+                                            <div className="text-xs font-medium text-muted-foreground mb-1">
+                                                Pose Detection
+                                            </div>
+                                            <div className="text-sm font-semibold">
+                                                {currentPoseData.detected ? (
+                                                    <span className="text-green-600">✓ Detected</span>
+                                                ) : (
+                                                    <span className="text-gray-500">Not Detected</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {currentPoseData.detected && (
+                                            <>
+                                                <div>
+                                                    <div className="text-xs font-medium text-muted-foreground mb-1">
+                                                        Landmarks
+                                                    </div>
+                                                    <div className="text-sm font-semibold">
+                                                        {currentPoseData.landmarksCount} points
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-xs font-medium text-muted-foreground mb-1">
+                                                        Visibility
+                                                    </div>
+                                                    <div className="text-sm font-semibold">
+                                                        {(currentPoseData.visibility * 100).toFixed(1)}%
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    )
+}

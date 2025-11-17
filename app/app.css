@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(98% 0.02 20);
+  --secondary-background: oklch(98% 0.02 20);
+  --foreground: oklch(0% 0 0);
+  --main-foreground: oklch(0% 0 0);
+  --main: oklch(70.79% 0.1862 16.25);
+  --border: oklch(0% 0 0);
+  --ring: oklch(0% 0 0);
+  --overlay: oklch(0% 0 0 / 0.8);
+  --shadow: 4px 4px 0px 0px var(--border);
+  --chart-1: #FF6678;
+  --chart-2: #7A83FF;
+  --chart-3: #FACC00;
+  --chart-4: #00D696;
+  --chart-5: #5294FF;
+  --chart-active-dot: #000;
+  --popover: oklch(98% 0.02 20); /* Use your secondary background color */
+  --popover-foreground: oklch(0% 0 0); /* Use your foreground color */
+}
+
+.dark {
+  --background: oklch(25.15% 0.0495 7.54);
+  --secondary-background: oklch(23.93% 0 0);
+  --foreground: oklch(92.49% 0 0);
+  --main-foreground: oklch(0% 0 0);
+  --main: oklch(67.58% 0.2135 18.63);
+  --border: oklch(0% 0 0);
+  --ring: oklch(100% 0 0);
+  --shadow: 4px 4px 0px 0px var(--border);
+  --chart-1: #FF4D61;
+  --chart-2: #7A83FF;
+  --chart-3: #E0B700;
+  --chart-4: #00BD84;
+  --chart-5: #5294FF;
+  --chart-active-dot: #fff;
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+@theme inline {
+  --color-main: var(--main);
+  --color-background: var(--background);
+  --color-secondary-background: var(--secondary-background);
+  --color-foreground: var(--foreground);
+  --color-main-foreground: var(--main-foreground);
+  --color-border: var(--border);
+  --color-overlay: var(--overlay);
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-popover: var(--secondary-background);
+  --color-popover-foreground: var(--foreground);
+  --spacing-boxShadowX: 4px;
+  --spacing-boxShadowY: 4px;
+  --spacing-reverseBoxShadowX: -4px;
+  --spacing-reverseBoxShadowY: -4px;
+  --radius-base: 15px;
+  --shadow-shadow: var(--shadow);
+  --font-weight-base: 500;
+  --font-weight-heading: 700;
+}
+
+@layer base {
+  html, body {
+    @apply overflow-x-hidden;
+    max-width: 100vw;
+  }
+  
+  body {
+    @apply text-foreground font-base bg-background;
+  }
+
+  h1, h2, h3, h4, h5, h6{
+    @apply font-heading;
+  }
+}

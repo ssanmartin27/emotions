@@ -1,0 +1,22 @@
+# Install packages in this order to avoid dependency conflicts:
+# 1. pip install "numpy<2.0.0"  (required for tensorflowjs compatibility)
+# 2. pip install tensorflow
+# 3. pip install tensorflowjs
+# 4. pip install pandas scikit-learn
+
+# Data processing - MUST install numpy first with version constraint
+numpy>=1.24.0,<2.0.0
+
+# Core ML libraries
+tensorflow
+tensorflowjs
+
+# Other data processing
+pandas
+
+# ML utilities
+scikit-learn
+
+
+
+

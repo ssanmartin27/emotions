@@ -1,0 +1,134 @@
+// See the docs at https://docs.convex.dev/agents/threads
+import { components } from "./_generated/api";
+
+import { v } from "convex/values";
+import {
+    action,
+    ActionCtx,
+    mutation,
+    MutationCtx,
+    query,
+    QueryCtx,
+} from "./_generated/server.js";
+import { paginationOptsValidator } from "convex/server";
+import {
+    createThread,
+    getThreadMetadata,
+    saveMessage,
+    vMessage,
+} from "@convex-dev/agent";
+import { getAuthUserId } from "./utils";
+import { fashionAgent as agent } from "./agents/fashion";
+import { z } from "zod/v3";
+
+export const listThreads = query({
+    args: {
+        paginationOpts: paginationOptsValidator,
+    },
+    handler: async (ctx, args) => {
+        const userId = await getAuthUserId(ctx);
+        const threads = await ctx.runQuery(
+            components.agent.threads.listThreadsByUserId,
+            { userId, paginationOpts: args.paginationOpts },
+        );
+        return threads;
+    },
+});
+
+export const createNewThread = mutation({
+    args: { 
+        title: v.optional(v.string()), 
+        initialMessage: v.optional(vMessage),
+        context: v.optional(v.object({
+            currentPage: v.optional(v.string()),
+            userRole: v.optional(v.string()),
+            userName: v.optional(v.string()),
+        })),
+    },
+    handler: async (ctx, { title, initialMessage, context }) => {
+        const userId = await getAuthUserId(ctx);
+        const threadId = await createThread(ctx, components.agent, {
+            userId,
+            title,
+        });
+        if (initialMessage) {
+            await saveMessage(ctx, components.agent, {
+                threadId,
+                message: initialMessage,
+            });
+        } else {
+            // Send initial greeting
+            let greeting = "Hello! I'm Buddy, your Emo-Kids support assistant. ";
+            if (context?.userName) {
+                greeting += `Nice to meet you, ${context.userName}! `;
+            }
+            if (context?.currentPage) {
+                greeting += `I see you're on the ${context.currentPage} page. `;
+            }
+            greeting += "How can I help you today?";
+            
+            await saveMessage(ctx, components.agent, {
+                threadId,
+                message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: greeting }],
+                },
+            });
+        }
+        return threadId;
+    },
+});
+
+export const getThreadDetails = query({
+    args: { threadId: v.string() },
+    handler: async (ctx, { threadId }) => {
+        await authorizeThreadAccess(ctx, threadId);
+        const { title, summary } = await getThreadMetadata(ctx, components.agent, {
+            threadId,
+        });
+        return { title, summary };
+    },
+});
+
+export const updateThreadTitle = action({
+    args: { threadId: v.string() },
+    handler: async (ctx, { threadId }) => {
+        await authorizeThreadAccess(ctx, threadId);
+        const { thread } = await agent.continueThread(ctx, { threadId });
+        const {
+            object: { title, summary },
+        } = await thread.generateObject(
+            {
+                mode: "json",
+                schemaDescription:
+                    "Generate a title and summary for the thread. The title should be a single sentence that captures the main topic of the thread. The summary should be a short description of the thread that could be used to describe it to someone who hasn't read it.",
+                schema: z.object({
+                    title: z.string().describe("The new title for the thread"),
+                    summary: z.string().describe("The new summary for the thread"),
+                }),
+                prompt: "Generate a title and summary for this thread.",
+            },
+            { storageOptions: { saveMessages: "none" } },
+        );
+        await thread.updateMetadata({ title, summary });
+    },
+});
+
+export async function authorizeThreadAccess(
+    ctx: QueryCtx | MutationCtx | ActionCtx,
+    threadId: string,
+    requireUser?: boolean,
+) {
+    const userId = await getAuthUserId(ctx);
+    if (requireUser && !userId) {
+        throw new Error("Unauthorized: user is required");
+    }
+    const { userId: threadUserId } = await getThreadMetadata(
+        ctx,
+        components.agent,
+        { threadId },
+    );
+    if (requireUser && threadUserId !== userId) {
+        throw new Error("Unauthorized: user does not match thread user");
+    }
+}
