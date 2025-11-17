@@ -2,14 +2,13 @@
 
 import {
     AudioWaveform,
-    BadgeCheck, BarChart3,
-    Bell,
+    BarChart3,
     BookOpen,
     Bot, Calendar,
     ChevronRight, // This is no longer used but kept in imports for reference
     ChevronsUpDown,
     Command,
-    CreditCard, FileText,
+    FileText,
     Folder,
     Forward,
     Frame,
@@ -20,7 +19,6 @@ import {
     PieChart,
     Plus, Settings,
     Settings2,
-    Sparkles,
     SquareTerminal,
     Trash2, User, Users,
 } from "lucide-react"
@@ -443,33 +441,9 @@ export function AppSidebar({ user, ...props }: React.ComponentProps<typeof Sideb
                                     </div>
                                 </DropdownMenuLabel>
                                 <DropdownMenuSeparator />
-                                <DropdownMenuGroup>
-                                    <DropdownMenuItem>
-                                        <Sparkles />
-                                        Upgrade to Pro
-                                    </DropdownMenuItem>
-                                </DropdownMenuGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuGroup>
-                                    <DropdownMenuItem>
-                                        <BadgeCheck />
-                                        Account
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem>
-                                        <CreditCard />
-                                        Billing
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem>
-                                        <Bell />
-                                        Notifications
-                                    </DropdownMenuItem>
-                                </DropdownMenuGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem>
-                                    <Button onClick={() => void signOut()}>
+                                <DropdownMenuItem onClick={() => void signOut()}>
                                     <LogOut />
                                     Log out
-                                    </Button>
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
