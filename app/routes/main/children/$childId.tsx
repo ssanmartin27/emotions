@@ -14,31 +14,15 @@ export default function ChildDetailView() {
     const { childId } = useParams()
     const navigate = useNavigate()
     
-    const child = useQuery(api.therapists.getChildById, { 
-        childId: childId as any 
-    })
-    const reports = useQuery(api.therapists.getChildReports, { 
-        childId: childId as any 
-    })
-    const emotionData = useQuery(api.emotions.getEmotionData, {
-        childId: childId as any,
-    })
-
-    if (!childId) {
-        return (
-            <div className="p-6">
-                <p>Invalid child ID. Please go back and try again.</p>
-            </div>
-        )
-    }
-
-    if (!child) {
-        return (
-            <div className="p-6">
-                <p>Loading child information...</p>
-            </div>
-        )
-    }
+    const child = useQuery(api.therapists.getChildById, 
+        childId ? { childId: childId as any } : "skip"
+    )
+    const reports = useQuery(api.therapists.getChildReports, 
+        childId ? { childId: childId as any } : "skip"
+    )
+    const emotionData = useQuery(api.emotions.getEmotionData,
+        childId ? { childId: childId as any } : "skip"
+    )
 
     const recentReports = reports?.slice(0, 5) || []
 
@@ -106,6 +90,23 @@ export default function ChildDetailView() {
 
         return result
     }, [reports])
+
+    // Early returns after all hooks
+    if (!childId) {
+        return (
+            <div className="p-6">
+                <p>Invalid child ID. Please go back and try again.</p>
+            </div>
+        )
+    }
+
+    if (!child) {
+        return (
+            <div className="p-6">
+                <p>Loading child information...</p>
+            </div>
+        )
+    }
 
     const chartConfig = {
         anger: { label: "Anger", color: "var(--color-chart-1)" },
