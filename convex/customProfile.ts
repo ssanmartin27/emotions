@@ -14,13 +14,17 @@ export default Password<DataModel>({
     profile(params, ctx) {
         // `params` are the values sent from the frontend `signIn` call.
         // During sign-in, only email and password are provided.
-        // Only return full profile data during sign-up.
+        // During sign-up, all profile fields are provided.
         
-        // For sign-in, we don't need to return profile data
-        // The auth system will find the user by email
+        // For sign-in, provide minimal profile (these won't be used if user exists)
+        // The auth system will find the user by email and use existing profile
         if (params.flow === "signIn") {
             return {
                 email: params.email as string,
+                firstName: "", // Not used during sign-in, but required by type
+                lastName: "", // Not used during sign-in, but required by type
+                username: "", // Not used during sign-in, but required by type
+                role: "parent" as const, // Not used during sign-in, but required by type
             };
         }
 
