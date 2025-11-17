@@ -58,13 +58,22 @@ export default function LoginPage() {
                         } catch (e) {
                             let friendlyMessage = "An unexpected error occurred. Please try again.";
                             if (e instanceof Error) {
-                                const message = e.message;
-                                if (message.includes("InvalidSecret") ||
-                                    message.includes("InvalidAccountId")) {
+                                const message = e.message.toLowerCase();
+                                // Check for various error patterns
+                                if (message.includes("invalidsecret") ||
+                                    message.includes("invalidaccountid") ||
+                                    message.includes("account not found") ||
+                                    message.includes("user not found") ||
+                                    message.includes("no account") ||
+                                    message.includes("invalid credentials")) {
                                     friendlyMessage = "Invalid email or password. Please try again.";
-                                }
-                                else {
-                                    friendlyMessage = message;
+                                } else if (message.includes("server error") || 
+                                          message.includes("internal error") ||
+                                          message.includes("convex")) {
+                                    friendlyMessage = "A server error occurred. Please try again later.";
+                                } else {
+                                    // For other errors, show a generic friendly message
+                                    friendlyMessage = "Unable to sign in. Please check your email and password and try again.";
                                 }
 
                                 setError(friendlyMessage);
@@ -91,6 +100,7 @@ export default function LoginPage() {
                                 name="email"
                                 type="email"
                                 placeholder="m@example.com"
+                                autoComplete="email"
                                 required
                             />
                         </div>
@@ -104,7 +114,13 @@ export default function LoginPage() {
                                     Forgot your password?
                                 </Link>
                             </div>
-                            <Input id="password" type="password" name="password" required />
+                            <Input 
+                                id="password" 
+                                type="password" 
+                                name="password" 
+                                autoComplete="current-password"
+                                required 
+                            />
                             <input name="flow" type="hidden" value="signIn" />
                         </div>
 
