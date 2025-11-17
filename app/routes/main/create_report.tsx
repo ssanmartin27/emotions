@@ -127,6 +127,17 @@ export default function CreateReportPage() {
         if (extractedLandmarks.length > 0) {
             try {
                 const predictor = getEmotionPredictor()
+                
+                // Check if model is available before trying to load
+                const modelAvailable = await predictor.isModelAvailable()
+                if (!modelAvailable) {
+                    console.log("Model not available, skipping emotion prediction")
+                    toast.info("Model not available", {
+                        description: "Creating report without AI predictions. You can manually set emotion intensities.",
+                    })
+                    return
+                }
+                
                 await predictor.loadModel()
                 
                 // Extract AUs from landmarks
@@ -148,8 +159,8 @@ export default function CreateReportPage() {
                 toast.success("Emotions predicted from video analysis")
             } catch (error) {
                 console.error("Error predicting emotions:", error)
-                toast.error("Failed to predict emotions", {
-                    description: "Model may not be loaded. Please ensure the model is trained and available.",
+                toast.info("Model not available", {
+                    description: "Creating report without AI predictions. You can manually set emotion intensities.",
                 })
             }
         }
@@ -221,7 +232,7 @@ export default function CreateReportPage() {
             })
 
             toast.success("Report created successfully")
-            navigate(`/main/children/${selectedChildId}`)
+            navigate(`/therapist/reports`)
         } catch (error) {
             toast.error("Failed to create report")
             console.error(error)

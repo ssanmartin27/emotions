@@ -42,6 +42,18 @@ class EmotionPredictor {
     private loadPromise: Promise<void> | null = null
 
     /**
+     * Check if the model file exists
+     */
+    async isModelAvailable(): Promise<boolean> {
+        try {
+            const response = await fetch(MODEL_PATH, { method: 'HEAD' })
+            return response.ok
+        } catch {
+            return false
+        }
+    }
+
+    /**
      * Load the TensorFlow.js model
      */
     async loadModel(): Promise<void> {
@@ -56,6 +68,12 @@ class EmotionPredictor {
         this.isLoading = true
         this.loadPromise = (async () => {
             try {
+                // Check if model exists first
+                const modelExists = await this.isModelAvailable()
+                if (!modelExists) {
+                    throw new Error('Model file not found')
+                }
+
                 // Load model
                 this.model = await tf.loadLayersModel(MODEL_PATH)
                 console.log('Emotion model loaded successfully')
