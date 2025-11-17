@@ -24,6 +24,14 @@ export default function ChildDetailView() {
         childId: childId as any,
     })
 
+    if (!childId) {
+        return (
+            <div className="p-6">
+                <p>Invalid child ID. Please go back and try again.</p>
+            </div>
+        )
+    }
+
     if (!child) {
         return (
             <div className="p-6">

@@ -160,7 +160,8 @@ export default function Home() {
                 reportCount,
                 lastAssessmentDate: latestReport?.createdAt,
             }
-        }).sort((a, b) => {
+        }).filter(childStatus => childStatus.childId) // Filter out any children without valid IDs
+        .sort((a, b) => {
             // Sort by status priority (urgent > attention > good > no-data)
             const priority: Record<typeof a.status, number> = { urgent: 0, attention: 1, good: 2, "no-data": 3 }
             return priority[a.status] - priority[b.status]
@@ -398,8 +399,13 @@ export default function Home() {
                                     return (
                                         <Link
                                             key={childStatus.childId}
-                                            to={`/therapist/children/${childStatus.childId}`}
+                                            to={childStatus.childId ? `/therapist/children/${childStatus.childId}` : '#'}
                                             className={`block p-3 rounded-lg border-2 transition-all hover:shadow-md ${statusColors[childStatus.status]}`}
+                                            onClick={(e) => {
+                                                if (!childStatus.childId) {
+                                                    e.preventDefault();
+                                                }
+                                            }}
                                         >
                                             <div className="flex items-center justify-between">
                                                 <div className="flex-1 min-w-0">
