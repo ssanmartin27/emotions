@@ -58,22 +58,25 @@ export default function LoginPage() {
                         } catch (e) {
                             let friendlyMessage = "An unexpected error occurred. Please try again.";
                             if (e instanceof Error) {
-                                const message = e.message.toLowerCase();
-                                // Check for various error patterns
-                                if (message.includes("invalidsecret") ||
-                                    message.includes("invalidaccountid") ||
-                                    message.includes("account not found") ||
-                                    message.includes("user not found") ||
-                                    message.includes("no account") ||
-                                    message.includes("invalid credentials")) {
+                                const message = e.message;
+                                // Show specific error messages for authentication failures
+                                if (message.includes("InvalidSecret")) {
+                                    friendlyMessage = "Incorrect password. Please try again.";
+                                } else if (message.includes("InvalidAccountId") ||
+                                          message.includes("account not found") ||
+                                          message.includes("user not found") ||
+                                          message.includes("no account")) {
+                                    friendlyMessage = "No account found with this email address. Please check your email or sign up.";
+                                } else if (message.includes("invalid credentials") ||
+                                          message.includes("authentication failed")) {
                                     friendlyMessage = "Invalid email or password. Please try again.";
                                 } else if (message.includes("server error") || 
                                           message.includes("internal error") ||
-                                          message.includes("convex")) {
+                                          (message.includes("convex") && message.toLowerCase().includes("server error"))) {
                                     friendlyMessage = "A server error occurred. Please try again later.";
                                 } else {
-                                    // For other errors, show a generic friendly message
-                                    friendlyMessage = "Unable to sign in. Please check your email and password and try again.";
+                                    // For other errors, show the actual error message
+                                    friendlyMessage = message;
                                 }
 
                                 setError(friendlyMessage);
