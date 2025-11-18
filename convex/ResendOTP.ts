@@ -1,6 +1,7 @@
 import Resend from "@auth/core/providers/resend";
 import { Resend as ResendAPI } from "resend";
 import { RandomReader, generateRandomString } from "@oslojs/crypto/random";
+import { getOTPEmailTemplate } from "./emails/templates";
 
 export const ResendOTP = Resend({
     id: "resend-otp",
@@ -19,10 +20,11 @@ export const ResendOTP = Resend({
     async sendVerificationRequest({ identifier: email, provider, token }) {
         const resend = new ResendAPI(provider.apiKey);
         const { error } = await resend.emails.send({
-            from: "My App <onboarding@resend.dev>",
+            from: "Emo-Kids <onboarding@emokids.app>",
             to: [email],
-            subject: `Sign in to My App`,
-            text: "Your code is " + token,
+            subject: `Sign in to Emo-Kids`,
+            html: getOTPEmailTemplate(token),
+            text: "Your sign-in code is " + token,
         });
 
         if (error) {

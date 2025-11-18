@@ -14,6 +14,7 @@ import type * as agents_fashion from "../agents/fashion.js";
 import type * as auth from "../auth.js";
 import type * as chat_basic from "../chat/basic.js";
 import type * as customProfile from "../customProfile.js";
+import type * as emails_templates from "../emails/templates.js";
 import type * as emotions from "../emotions.js";
 import type * as http from "../http.js";
 import type * as parents from "../parents.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   "chat/basic": typeof chat_basic;
   customProfile: typeof customProfile;
+  "emails/templates": typeof emails_templates;
   emotions: typeof emotions;
   http: typeof http;
   parents: typeof parents;
