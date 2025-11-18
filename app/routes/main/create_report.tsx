@@ -8,11 +8,13 @@ import type { Id } from "convex/_generated/dataModel"
 
 import { toast } from "sonner"
 import { VideoProcessor, type LandmarkData } from "~/components/video-processor"
+import { AudioProcessor, type AudioProcessingData } from "~/components/audio-processor"
 import { getEmotionPredictor } from "~/utils/emotionPredictor"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
 import { Input } from "~/components/ui/input"
+import { Upload } from "lucide-react"
 import { cn } from "~/lib/utils"
 import {
     Dialog,
@@ -116,6 +118,9 @@ export default function CreateReportPage() {
         happiness: [0] as number[],
         guilt: [0] as number[],
     })
+    const [audioData, setAudioData] = useState<AudioProcessingData | null>(null)
+    const [videoFile, setVideoFile] = useState<File | null>(null)
+    const [mediaFile, setMediaFile] = useState<File | null>(null)
     const [testAnswers, setTestAnswers] = useState<Record<number, string>>({})
     const [showTestDialog, setShowTestDialog] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
@@ -169,6 +174,34 @@ export default function CreateReportPage() {
     const handleEmotionChange = useCallback((emotion: EmotionKey, value: number) => {
         setEmotionData(prev => ({ ...prev, [emotion]: [value] }))
     }, [])
+
+    const handleAudioProcessed = useCallback((data: AudioProcessingData) => {
+        setAudioData(data)
+    }, [])
+
+    const handleVideoFileChange = useCallback((file: File | null) => {
+        setVideoFile(file)
+    }, [])
+
+    // Calculate combined emotion data when both video and audio are available
+    const combinedEmotionData = useMemo(() => {
+        if (!audioData || emotionData.anger[0] === 0 && emotionData.sadness[0] === 0) {
+            return undefined
+        }
+
+        // Weighted average: 60% video, 40% audio (can be adjusted)
+        const videoWeight = 0.6
+        const audioWeight = 0.4
+
+        return {
+            anger: (emotionData.anger[0] * videoWeight + audioData.emotionPredictions.anger * audioWeight) || undefined,
+            sadness: (emotionData.sadness[0] * videoWeight + audioData.emotionPredictions.sadness * audioWeight) || undefined,
+            anxiety: (emotionData.anxiety[0] * videoWeight + audioData.emotionPredictions.anxiety * audioWeight) || undefined,
+            fear: (emotionData.fear[0] * videoWeight + audioData.emotionPredictions.fear * audioWeight) || undefined,
+            happiness: (emotionData.happiness[0] * videoWeight + audioData.emotionPredictions.happiness * audioWeight) || undefined,
+            guilt: (emotionData.guilt[0] * videoWeight + audioData.emotionPredictions.guilt * audioWeight) || undefined,
+        }
+    }, [emotionData, audioData])
 
     const handleTestAnswer = (questionIndex: number, answer: string) => {
         setTestAnswers(prev => ({ ...prev, [questionIndex]: answer }))
@@ -228,6 +261,22 @@ export default function CreateReportPage() {
                     happiness: emotionData.happiness[0] || undefined,
                     guilt: emotionData.guilt[0] || undefined,
                 },
+                audioEmotionData: audioData ? {
+                    anger: audioData.emotionPredictions.anger || undefined,
+                    sadness: audioData.emotionPredictions.sadness || undefined,
+                    anxiety: audioData.emotionPredictions.anxiety || undefined,
+                    fear: audioData.emotionPredictions.fear || undefined,
+                    happiness: audioData.emotionPredictions.happiness || undefined,
+                    guilt: audioData.emotionPredictions.guilt || undefined,
+                } : undefined,
+                transcription: audioData?.transcription?.text,
+                sentimentAnalysis: audioData?.sentimentAnalysis ? {
+                    overallSentiment: audioData.sentimentAnalysis.overallSentiment,
+                    sentimentScore: audioData.sentimentAnalysis.sentimentScore,
+                    emotionPhrases: audioData.sentimentAnalysis.emotionPhrases,
+                    keyPhrases: audioData.sentimentAnalysis.keyPhrases,
+                } : undefined,
+                combinedEmotionData,
                 testResults,
             })
 
@@ -453,21 +502,115 @@ export default function CreateReportPage() {
                             )}
                         </div>
 
-                        {/* Video Processing */}
-                        <div className="grid gap-3">
-                            <Label className="text-lg font-semibold">Video Processing (Optional)</Label>
-                            <VideoProcessor
-                                onLandmarksExtracted={handleLandmarksExtracted}
-                                onError={handleVideoError}
-                            />
-                            {landmarks.length > 0 && (
-                                <div className="p-4 bg-chart-4/20 border-2 border-border shadow-shadow rounded-base">
-                                    <p className="text-sm text-foreground font-base">
-                                        ✓ Processed {landmarks.length} frames with facial landmarks and pose data
-                                    </p>
+                        {/* Media File Upload */}
+                        {!mediaFile && (
+                            <div className="grid gap-3">
+                                <Label className="text-lg font-semibold">Media File (Video or Audio)</Label>
+                                <div className="border-2 border-dashed border-border rounded-base p-6 text-center">
+                                    <input
+                                        type="file"
+                                        accept="video/*,audio/*"
+                                        onChange={(e) => {
+                                            const file = e.target.files?.[0]
+                                            if (file) {
+                                                setMediaFile(file)
+                                                // Determine if it's video or audio
+                                                if (file.type.startsWith('video/')) {
+                                                    setVideoFile(file)
+                                                    // VideoProcessor will handle video processing
+                                                } else if (file.type.startsWith('audio/')) {
+                                                    setVideoFile(null)
+                                                    // AudioProcessor will handle audio-only processing
+                                                }
+                                            }
+                                        }}
+                                        className="hidden"
+                                        id="media-upload"
+                                    />
+                                    <label
+                                        htmlFor="media-upload"
+                                        className="cursor-pointer flex flex-col items-center gap-2"
+                                    >
+                                        <Upload className="h-8 w-8 text-muted-foreground" />
+                                        <span className="text-sm font-medium">
+                                            Click to upload or drag and drop
+                                        </span>
+                                        <span className="text-xs text-muted-foreground">
+                                            Video or audio file (MP4, MOV, MP3, WAV, etc.)
+                                        </span>
+                                    </label>
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        )}
+
+                        {/* Video Processing */}
+                        {mediaFile && mediaFile.type.startsWith('video/') && (
+                            <div className="grid gap-3">
+                                <Label className="text-lg font-semibold">Video Processing</Label>
+                                <VideoProcessor
+                                    initialFile={mediaFile}
+                                    onLandmarksExtracted={handleLandmarksExtracted}
+                                    onError={handleVideoError}
+                                    onAudioExtracted={handleVideoFileChange}
+                                    onFileRemoved={() => {
+                                        setMediaFile(null)
+                                        setVideoFile(null)
+                                        setLandmarks([])
+                                        setAudioData(null)
+                                        setEmotionData({
+                                            anger: [0],
+                                            sadness: [0],
+                                            anxiety: [0],
+                                            fear: [0],
+                                            happiness: [0],
+                                            guilt: [0],
+                                        })
+                                    }}
+                                />
+                                {landmarks.length > 0 && (
+                                    <div className="p-4 bg-chart-4/20 border-2 border-border shadow-shadow rounded-base">
+                                        <p className="text-sm text-foreground font-base">
+                                            ✓ Processed {landmarks.length} frames with facial landmarks and pose data
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Audio Processing */}
+                        {mediaFile && (
+                            <div className="grid gap-3">
+                                <Label className="text-lg font-semibold">
+                                    {mediaFile.type.startsWith('video/') ? 'Audio Extraction & Processing' : 'Audio Processing'}
+                                </Label>
+                                <AudioProcessor
+                                    onAudioProcessed={handleAudioProcessed}
+                                    onError={handleVideoError}
+                                    videoFile={mediaFile.type.startsWith('video/') ? videoFile : null}
+                                    initialAudioFile={mediaFile.type.startsWith('audio/') ? mediaFile : null}
+                                />
+                            </div>
+                        )}
+
+                        {/* Combined Analysis Preview */}
+                        {combinedEmotionData && (
+                            <div className="grid gap-3">
+                                <Label className="text-lg font-semibold">Combined Analysis Preview</Label>
+                                <div className="p-4 bg-chart-5/20 border-2 border-border shadow-shadow rounded-base">
+                                    <p className="text-sm font-semibold mb-2">Combined Emotion Predictions (60% Video + 40% Audio):</p>
+                                    <div className="grid grid-cols-2 gap-2 text-xs">
+                                        {Object.entries(combinedEmotionData).map(([emotion, value]) => (
+                                            value !== undefined && (
+                                                <div key={emotion} className="flex justify-between">
+                                                    <span className="capitalize">{emotion}:</span>
+                                                    <span className="font-medium">{value.toFixed(2)}/5</span>
+                                                </div>
+                                            )
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Submit Button */}
                         <div className="flex gap-4 pt-4 border-t-2 border-border">

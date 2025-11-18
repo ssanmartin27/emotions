@@ -73,6 +73,46 @@ export default defineSchema({
             happiness: v.optional(v.number()),
             guilt: v.optional(v.number()),
         }),
+        audioEmotionData: v.optional(v.object({
+            anger: v.optional(v.number()),
+            sadness: v.optional(v.number()),
+            anxiety: v.optional(v.number()),
+            fear: v.optional(v.number()),
+            happiness: v.optional(v.number()),
+            guilt: v.optional(v.number()),
+        })),
+        transcription: v.optional(v.string()),
+        sentimentAnalysis: v.optional(v.object({
+            overallSentiment: v.union(v.literal("positive"), v.literal("negative"), v.literal("neutral")),
+            sentimentScore: v.number(),
+            emotionPhrases: v.optional(v.array(v.object({
+                text: v.string(),
+                emotion: v.union(
+                    v.literal("anger"),
+                    v.literal("sadness"),
+                    v.literal("anxiety"),
+                    v.literal("fear"),
+                    v.literal("happiness"),
+                    v.literal("guilt")
+                ),
+                confidence: v.number(),
+                startIndex: v.number(),
+                endIndex: v.number(),
+            }))),
+            keyPhrases: v.optional(v.array(v.object({
+                text: v.string(),
+                sentiment: v.union(v.literal("positive"), v.literal("negative"), v.literal("neutral")),
+                relevance: v.number(),
+            }))),
+        })),
+        combinedEmotionData: v.optional(v.object({
+            anger: v.optional(v.number()),
+            sadness: v.optional(v.number()),
+            anxiety: v.optional(v.number()),
+            fear: v.optional(v.number()),
+            happiness: v.optional(v.number()),
+            guilt: v.optional(v.number()),
+        })),
         testResults: v.optional(v.array(v.object({
             question: v.string(),
             answer: v.string(),

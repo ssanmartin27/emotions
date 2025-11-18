@@ -36,6 +36,46 @@ export const createReport = mutation({
             happiness: v.optional(v.number()),
             guilt: v.optional(v.number()),
         }),
+        audioEmotionData: v.optional(v.object({
+            anger: v.optional(v.number()),
+            sadness: v.optional(v.number()),
+            anxiety: v.optional(v.number()),
+            fear: v.optional(v.number()),
+            happiness: v.optional(v.number()),
+            guilt: v.optional(v.number()),
+        })),
+        transcription: v.optional(v.string()),
+        sentimentAnalysis: v.optional(v.object({
+            overallSentiment: v.union(v.literal("positive"), v.literal("negative"), v.literal("neutral")),
+            sentimentScore: v.number(),
+            emotionPhrases: v.optional(v.array(v.object({
+                text: v.string(),
+                emotion: v.union(
+                    v.literal("anger"),
+                    v.literal("sadness"),
+                    v.literal("anxiety"),
+                    v.literal("fear"),
+                    v.literal("happiness"),
+                    v.literal("guilt")
+                ),
+                confidence: v.number(),
+                startIndex: v.number(),
+                endIndex: v.number(),
+            }))),
+            keyPhrases: v.optional(v.array(v.object({
+                text: v.string(),
+                sentiment: v.union(v.literal("positive"), v.literal("negative"), v.literal("neutral")),
+                relevance: v.number(),
+            }))),
+        })),
+        combinedEmotionData: v.optional(v.object({
+            anger: v.optional(v.number()),
+            sadness: v.optional(v.number()),
+            anxiety: v.optional(v.number()),
+            fear: v.optional(v.number()),
+            happiness: v.optional(v.number()),
+            guilt: v.optional(v.number()),
+        })),
         testResults: v.optional(v.array(v.object({
             question: v.string(),
             answer: v.string(),
@@ -70,6 +110,28 @@ export const createReport = mutation({
                 }
             }
 
+            // Clean audio emotion data
+            const cleanedAudioEmotionData: Record<string, number | undefined> = {};
+            if (args.audioEmotionData) {
+                for (const emotion of emotions) {
+                    const value = args.audioEmotionData[emotion];
+                    if (value !== undefined && value !== null && !isNaN(value)) {
+                        cleanedAudioEmotionData[emotion] = value;
+                    }
+                }
+            }
+
+            // Clean combined emotion data
+            const cleanedCombinedEmotionData: Record<string, number | undefined> = {};
+            if (args.combinedEmotionData) {
+                for (const emotion of emotions) {
+                    const value = args.combinedEmotionData[emotion];
+                    if (value !== undefined && value !== null && !isNaN(value)) {
+                        cleanedCombinedEmotionData[emotion] = value;
+                    }
+                }
+            }
+
             const now = Date.now();
             const reportId = await ctx.db.insert("reports", {
                 childId: args.childId,
@@ -78,6 +140,10 @@ export const createReport = mutation({
                 text: args.text,
                 landmarks: args.landmarks,
                 emotionData: cleanedEmotionData,
+                audioEmotionData: Object.keys(cleanedAudioEmotionData).length > 0 ? cleanedAudioEmotionData : undefined,
+                transcription: args.transcription,
+                sentimentAnalysis: args.sentimentAnalysis,
+                combinedEmotionData: Object.keys(cleanedCombinedEmotionData).length > 0 ? cleanedCombinedEmotionData : undefined,
                 testResults: args.testResults,
                 richTextContent: args.richTextContent,
                 createdAt: now,

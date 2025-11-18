@@ -61,6 +61,24 @@ export default function ReportDetailView() {
         { emotion: "Guilt", value: report.emotionData.guilt || 0 },
     ].filter(item => item.value > 0)
 
+    const audioEmotionChartData = report.audioEmotionData ? [
+        { emotion: "Anger", value: report.audioEmotionData.anger || 0 },
+        { emotion: "Sadness", value: report.audioEmotionData.sadness || 0 },
+        { emotion: "Anxiety", value: report.audioEmotionData.anxiety || 0 },
+        { emotion: "Fear", value: report.audioEmotionData.fear || 0 },
+        { emotion: "Happiness", value: report.audioEmotionData.happiness || 0 },
+        { emotion: "Guilt", value: report.audioEmotionData.guilt || 0 },
+    ].filter(item => item.value > 0) : []
+
+    const combinedEmotionChartData = report.combinedEmotionData ? [
+        { emotion: "Anger", value: report.combinedEmotionData.anger || 0 },
+        { emotion: "Sadness", value: report.combinedEmotionData.sadness || 0 },
+        { emotion: "Anxiety", value: report.combinedEmotionData.anxiety || 0 },
+        { emotion: "Fear", value: report.combinedEmotionData.fear || 0 },
+        { emotion: "Happiness", value: report.combinedEmotionData.happiness || 0 },
+        { emotion: "Guilt", value: report.combinedEmotionData.guilt || 0 },
+    ].filter(item => item.value > 0) : []
+
     const chartConfig = {
         value: { label: "Intensity", color: "var(--color-chart-1)" },
     } satisfies ChartConfig
@@ -141,36 +159,195 @@ export default function ReportDetailView() {
                     </CardContent>
             </Card>
 
-            {/* Emotion Data */}
-            {emotionChartData.length > 0 && (
+            {/* Emotion Analysis Tabs */}
+            <Card>
+                <CardHeader>
+                    <CardTitle>Emotion Analysis</CardTitle>
+                    <CardDescription>Emotional states from video and audio analysis</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <Tabs 
+                        defaultValue={
+                            emotionChartData.length > 0 ? "video" : 
+                            audioEmotionChartData.length > 0 ? "audio" : 
+                            "combined"
+                        } 
+                        className="w-full"
+                    >
+                        <TabsList>
+                            {emotionChartData.length > 0 && <TabsTrigger value="video">Video Analysis</TabsTrigger>}
+                            {audioEmotionChartData.length > 0 && <TabsTrigger value="audio">Audio Analysis</TabsTrigger>}
+                            {combinedEmotionChartData.length > 0 && <TabsTrigger value="combined">Combined Analysis</TabsTrigger>}
+                        </TabsList>
+                        
+                        {/* Video Analysis */}
+                        {emotionChartData.length > 0 && (
+                            <TabsContent value="video" className="space-y-4">
+                                <div className="w-full overflow-x-auto">
+                                    <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-[300px]">
+                                        <BarChart data={emotionChartData}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="emotion" />
+                                            <YAxis domain={[0, 5]} />
+                                            <ChartTooltip content={<ChartTooltipContent />} />
+                                            <Bar dataKey="value" fill="var(--color-chart-1)" radius={[8, 8, 0, 0]} />
+                                        </BarChart>
+                                    </ChartContainer>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {Object.entries(report.emotionData).map(([emotion, value]) => {
+                                        if (value === undefined || value === 0) return null
+                                        return (
+                                            <div key={emotion} className="flex justify-between">
+                                                <span className="capitalize">{emotion}:</span>
+                                                <span className="font-semibold">{value}/5</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </TabsContent>
+                        )}
+
+                        {/* Audio Analysis */}
+                        {audioEmotionChartData.length > 0 && (
+                            <TabsContent value="audio" className="space-y-4">
+                                <div className="w-full overflow-x-auto">
+                                    <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-[300px]">
+                                        <BarChart data={audioEmotionChartData}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="emotion" />
+                                            <YAxis domain={[0, 5]} />
+                                            <ChartTooltip content={<ChartTooltipContent />} />
+                                            <Bar dataKey="value" fill="var(--color-chart-2)" radius={[8, 8, 0, 0]} />
+                                        </BarChart>
+                                    </ChartContainer>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {report.audioEmotionData && Object.entries(report.audioEmotionData).map(([emotion, value]) => {
+                                        if (value === undefined || value === 0) return null
+                                        return (
+                                            <div key={emotion} className="flex justify-between">
+                                                <span className="capitalize">{emotion}:</span>
+                                                <span className="font-semibold">{value}/5</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </TabsContent>
+                        )}
+
+                        {/* Combined Analysis */}
+                        {combinedEmotionChartData.length > 0 && (
+                            <TabsContent value="combined" className="space-y-4">
+                                <div className="p-3 bg-chart-5/10 border border-chart-5/20 rounded-lg">
+                                    <p className="text-sm text-muted-foreground">
+                                        Combined analysis uses weighted average: 60% video + 40% audio
+                                    </p>
+                                </div>
+                                <div className="w-full overflow-x-auto">
+                                    <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-[300px]">
+                                        <BarChart data={combinedEmotionChartData}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="emotion" />
+                                            <YAxis domain={[0, 5]} />
+                                            <ChartTooltip content={<ChartTooltipContent />} />
+                                            <Bar dataKey="value" fill="var(--color-chart-5)" radius={[8, 8, 0, 0]} />
+                                        </BarChart>
+                                    </ChartContainer>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {report.combinedEmotionData && Object.entries(report.combinedEmotionData).map(([emotion, value]) => {
+                                        if (value === undefined || value === 0) return null
+                                        return (
+                                            <div key={emotion} className="flex justify-between">
+                                                <span className="capitalize">{emotion}:</span>
+                                                <span className="font-semibold">{value.toFixed(2)}/5</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </TabsContent>
+                        )}
+                    </Tabs>
+                </CardContent>
+            </Card>
+
+            {/* Transcription */}
+            {report.transcription && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Emotion Data</CardTitle>
-                        <CardDescription>Observed emotional states</CardDescription>
+                        <CardTitle>Audio Transcription</CardTitle>
+                        <CardDescription>Transcribed text from audio analysis</CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <div className="w-full overflow-x-auto">
-                            <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-[300px]">
-                                <BarChart data={emotionChartData}>
-                                    <CartesianGrid strokeDasharray="3 3" />
-                                    <XAxis dataKey="emotion" />
-                                    <YAxis domain={[0, 5]} />
-                                    <ChartTooltip content={<ChartTooltipContent />} />
-                                    <Bar dataKey="value" fill="var(--color-chart-1)" radius={[8, 8, 0, 0]} />
-                                </BarChart>
-                            </ChartContainer>
+                        <div className="prose max-w-none">
+                            <p className="whitespace-pre-wrap break-words">{report.transcription}</p>
                         </div>
-                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {Object.entries(report.emotionData).map(([emotion, value]) => {
-                                if (value === undefined || value === 0) return null
-                                return (
-                                    <div key={emotion} className="flex justify-between">
-                                        <span className="capitalize">{emotion}:</span>
-                                        <span className="font-semibold">{value}/5</span>
-                                    </div>
-                                )
-                            })}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Sentiment Analysis */}
+            {report.sentimentAnalysis && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Sentiment Analysis</CardTitle>
+                        <CardDescription>Analysis of transcribed text for emotional indicators</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="flex items-center gap-4">
+                            <div>
+                                <p className="text-sm text-muted-foreground">Overall Sentiment</p>
+                                <p className="text-lg font-semibold capitalize">
+                                    {report.sentimentAnalysis.overallSentiment}
+                                    {" "}
+                                    <span className="text-sm font-normal text-muted-foreground">
+                                        ({report.sentimentAnalysis.sentimentScore > 0 ? '+' : ''}{report.sentimentAnalysis.sentimentScore.toFixed(2)})
+                                    </span>
+                                </p>
+                            </div>
                         </div>
+
+                        {report.sentimentAnalysis.emotionPhrases && report.sentimentAnalysis.emotionPhrases.length > 0 && (
+                            <div>
+                                <p className="text-sm font-semibold mb-2">Emotion-Specific Phrases</p>
+                                <div className="space-y-2">
+                                    {report.sentimentAnalysis.emotionPhrases.map((phrase, idx) => (
+                                        <div key={idx} className="p-3 border rounded-lg bg-muted/50">
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-sm font-semibold capitalize">{phrase.emotion}</span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    Confidence: {(phrase.confidence * 100).toFixed(0)}%
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-muted-foreground italic">"{phrase.text}"</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {report.sentimentAnalysis.keyPhrases && report.sentimentAnalysis.keyPhrases.length > 0 && (
+                            <div>
+                                <p className="text-sm font-semibold mb-2">Key Phrases</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {report.sentimentAnalysis.keyPhrases.map((phrase, idx) => (
+                                        <span
+                                            key={idx}
+                                            className={`px-3 py-1 rounded-full text-xs ${
+                                                phrase.sentiment === 'positive' 
+                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                    : phrase.sentiment === 'negative'
+                                                    ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                    : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+                                            }`}
+                                        >
+                                            {phrase.text}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
             )}

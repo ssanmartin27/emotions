@@ -1,12 +1,13 @@
 "use client"
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { FilesetResolver, FaceLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision"
 import { calculateAUs } from "~/utils/mediapipe-aus"
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Upload, X, Play, Pause } from "lucide-react"
+import { toast } from "sonner"
 
 export interface LandmarkData {
     frame: number
@@ -32,16 +33,33 @@ export interface LandmarkData {
 interface VideoProcessorProps {
     onLandmarksExtracted: (landmarks: LandmarkData[]) => void
     onError?: (error: Error) => void
+    onAudioExtracted?: (audioFile: File) => void // Callback for extracted audio
+    onFileRemoved?: () => void // Callback when file is removed
+    initialFile?: File | null // Optional initial video file
 }
 
-export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessorProps) {
+export function VideoProcessor({ onLandmarksExtracted, onError, onAudioExtracted, onFileRemoved, initialFile }: VideoProcessorProps) {
     const videoRef = useRef<HTMLVideoElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const faceLandmarkerRef = useRef<FaceLandmarker | null>(null)
     const poseLandmarkerRef = useRef<PoseLandmarker | null>(null)
     const animationFrameRef = useRef<number | null>(null)
     
+    // Track the current video file (either from initialFile prop or user upload)
     const [videoFile, setVideoFile] = useState<File | null>(null)
+    
+    // Determine the current video file to use - useMemo to ensure it updates when initialFile changes
+    const currentVideoFile = useMemo(() => {
+        const result = videoFile || (initialFile && initialFile.type.startsWith("video/") ? initialFile : null)
+        console.log("VideoProcessor currentVideoFile:", {
+            hasVideoFile: !!videoFile,
+            hasInitialFile: !!initialFile,
+            initialFileType: initialFile?.type,
+            result: result?.name
+        })
+        return result
+    }, [videoFile, initialFile])
+    
     const [isProcessing, setIsProcessing] = useState(false)
     const [progress, setProgress] = useState(0)
     const [isPlaying, setIsPlaying] = useState(false)
@@ -139,6 +157,24 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
             }
         }
     }, [onError])
+
+    // Reset state when initialFile changes (but don't overwrite user-uploaded file)
+    useEffect(() => {
+        if (initialFile && initialFile.type.startsWith("video/")) {
+            // Reset processing state when initialFile changes
+            if (!videoFile || videoFile !== initialFile) {
+                setLandmarks([])
+                setProgress(0)
+                setCurrentFrame(0)
+                setIsPlaying(false)
+                // Clear video element
+                if (videoRef.current) {
+                    videoRef.current.pause()
+                    videoRef.current.src = ""
+                }
+            }
+        }
+    }, [initialFile, videoFile])
 
     // Handle video file selection
     const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -439,19 +475,36 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
 
     // Process entire video
     const processVideo = useCallback(async () => {
-        if (!videoRef.current || !videoFile || !isInitialized) return
+        if (!videoRef.current || !currentVideoFile || !isInitialized) return
 
         setIsProcessing(true)
         setProgress(0)
         setLandmarks([])
 
         const video = videoRef.current
+        
+        // Ensure video is paused and reset to beginning
+        video.pause()
+        setIsPlaying(false)
+        video.currentTime = 0
+        
+        // Wait for video to be ready and seek to beginning
+        await new Promise<void>((resolve) => {
+            const handleSeeked = () => {
+                video.removeEventListener("seeked", handleSeeked)
+                resolve()
+            }
+            video.addEventListener("seeked", handleSeeked)
+            // Force seek to 0 if already at 0
+            if (video.currentTime === 0) {
+                video.currentTime = 0.001
+                video.currentTime = 0
+            }
+        })
+        
         const fps = 30
         const frameDuration = 1 / fps
         const totalFrames = Math.floor(video.duration * fps)
-        
-        video.currentTime = 0
-        video.pause() // Don't play, just seek through frames
         
         // Reset timestamp counters for new video processing
         lastTimestampRef.current = 0
@@ -491,19 +544,23 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                             const poseResults = poseLandmarkerRef.current.detectForVideo(video, poseTimestampMs)
                             
                             if (faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) {
-                                // console.log("Drawing final frame with face landmarks") // Disabled for performance
                                 drawLandmarks(ctx, faceResults.faceLandmarks[0], canvas.width, canvas.height)
                             }
                             if (poseResults.landmarks && poseResults.landmarks.length > 0) {
-                                // console.log("Drawing final frame with pose landmarks") // Disabled for performance
                                 drawPoseLandmarks(ctx, poseResults.landmarks[0], canvas.width, canvas.height)
                             }
                         } catch (e) {
-                            // console.error("Error redrawing landmarks:", e) // Disabled for performance
+                            // Error drawing landmarks
                         }
                     }
                 }
                 video.currentTime = 0
+                
+                // Trigger audio extraction after video processing completes
+                if (onAudioExtracted && currentVideoFile) {
+                    onAudioExtracted(currentVideoFile)
+                }
+                
                 return
             }
 
@@ -532,45 +589,130 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
 
         // Start processing
         processNextFrame()
-    }, [videoFile, processFrame, isInitialized])
+    }, [currentVideoFile, processFrame, isInitialized, onAudioExtracted])
 
-    // Handle play/pause
-    const togglePlayPause = useCallback(() => {
-        if (!videoRef.current) return
+    // Draw video frame to canvas (for playback, no processing)
+    const drawVideoFrame = useCallback(() => {
+        if (!videoRef.current || !canvasRef.current) {
+            return
+        }
+
+        const video = videoRef.current
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext("2d")
+        if (!ctx) return
+
+        // Set canvas size to match video (only if changed)
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth || 640
+            canvas.height = video.videoHeight || 480
+        }
+
+        // Draw current video frame
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    }, [])
+
+    // Handle play/pause (just play/pause, no processing)
+    const togglePlayPause = useCallback(async () => {
+        if (!videoRef.current || !currentVideoFile) {
+            toast.error("Video not loaded")
+            return
+        }
+
+        const video = videoRef.current
 
         if (isPlaying) {
-            videoRef.current.pause()
+            video.pause()
             setIsPlaying(false)
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
+            }
+            // Remove timeupdate listener
+            const handler = (video as any)._playbackTimeUpdateHandler
+            if (handler) {
+                video.removeEventListener("timeupdate", handler)
+                delete (video as any)._playbackTimeUpdateHandler
             }
         } else {
-            videoRef.current.play()
-            setIsPlaying(true)
-            
-            // Process frames while playing
-            const processLoop = async () => {
-                if (videoRef.current && !videoRef.current.paused && !videoRef.current.ended) {
-                    await processFrame()
-                    animationFrameRef.current = requestAnimationFrame(processLoop)
-                } else {
-                    setIsPlaying(false)
+            try {
+                // Ensure video is ready
+                if (video.readyState < 2) {
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => {
+                            video.removeEventListener("canplay", handleCanPlay)
+                            video.removeEventListener("error", handleError)
+                            reject(new Error("Timeout waiting for video to load"))
+                        }, 10000)
+                        
+                        const handleCanPlay = () => {
+                            clearTimeout(timeout)
+                            video.removeEventListener("canplay", handleCanPlay)
+                            video.removeEventListener("error", handleError)
+                            resolve(undefined)
+                        }
+                        
+                        const handleError = () => {
+                            clearTimeout(timeout)
+                            video.removeEventListener("canplay", handleCanPlay)
+                            video.removeEventListener("error", handleError)
+                            reject(new Error("Video failed to load"))
+                        }
+                        
+                        video.addEventListener("canplay", handleCanPlay)
+                        video.addEventListener("error", handleError)
+                        video.load()
+                    })
                 }
+                
+                // Play the video
+                await video.play()
+                setIsPlaying(true)
+                
+                // Draw initial frame
+                drawVideoFrame()
+                
+                // Use timeupdate event to update canvas during playback
+                const handleTimeUpdate = () => {
+                    drawVideoFrame()
+                }
+                
+                video.addEventListener("timeupdate", handleTimeUpdate)
+                
+                // Store handler for cleanup
+                ;(video as any)._playbackTimeUpdateHandler = handleTimeUpdate
+            } catch (error) {
+                console.error("Error playing video:", error)
+                toast.error(`Failed to play video: ${error instanceof Error ? error.message : 'Unknown error'}`)
+                setIsPlaying(false)
             }
-            processLoop()
         }
-    }, [isPlaying, processFrame])
+    }, [isPlaying, currentVideoFile, drawVideoFrame])
 
     // Load and display video when file is selected
     useEffect(() => {
-        if (videoFile && videoRef.current && canvasRef.current) {
+        if (currentVideoFile && videoRef.current && canvasRef.current) {
             const video = videoRef.current
             const canvas = canvasRef.current
             const ctx = canvas.getContext("2d")
             
-            const url = URL.createObjectURL(videoFile)
+            // Clean up previous URL if exists
+            if (video.src) {
+                const oldUrl = video.src
+                video.src = ""
+                URL.revokeObjectURL(oldUrl)
+            }
+            
+            const url = URL.createObjectURL(currentVideoFile)
             video.src = url
             video.load()
+            
+            console.log("VideoProcessor: Loading video", {
+                fileName: currentVideoFile.name,
+                fileType: currentVideoFile.type,
+                hasVideoRef: !!videoRef.current,
+                hasCanvasRef: !!canvasRef.current
+            })
             
             const handleLoadedMetadata = () => {
                 if (video && canvas && ctx) {
@@ -593,20 +735,75 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                 }
             }
             
+            const handleCanPlay = () => {
+                // Video is ready to play
+                video.removeEventListener("canplay", handleCanPlay)
+            }
+            
             video.addEventListener("loadedmetadata", handleLoadedMetadata)
+            video.addEventListener("canplay", handleCanPlay)
             
             return () => {
                 video.removeEventListener("loadedmetadata", handleLoadedMetadata)
+                video.removeEventListener("canplay", handleCanPlay)
                 URL.revokeObjectURL(url)
             }
         }
-    }, [videoFile])
+    }, [currentVideoFile])
 
     // Cleanup
     useEffect(() => {
         return () => {
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
+            }
+        }
+    }, [])
+
+    // Stop animation when video ends or is paused
+    useEffect(() => {
+        const video = videoRef.current
+        if (!video) return
+
+        const handleEnded = () => {
+            setIsPlaying(false)
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
+            }
+            // Remove timeupdate listener
+            const handler = (video as any)._playbackTimeUpdateHandler
+            if (handler) {
+                video.removeEventListener("timeupdate", handler)
+                delete (video as any)._playbackTimeUpdateHandler
+            }
+        }
+
+        const handlePause = () => {
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
+            }
+            // Remove timeupdate listener
+            const handler = (video as any)._playbackTimeUpdateHandler
+            if (handler) {
+                video.removeEventListener("timeupdate", handler)
+                delete (video as any)._playbackTimeUpdateHandler
+            }
+        }
+
+        video.addEventListener("ended", handleEnded)
+        video.addEventListener("pause", handlePause)
+
+        return () => {
+            video.removeEventListener("ended", handleEnded)
+            video.removeEventListener("pause", handlePause)
+            // Clean up timeupdate listener if exists
+            const handler = (video as any)._playbackTimeUpdateHandler
+            if (handler) {
+                video.removeEventListener("timeupdate", handler)
+                delete (video as any)._playbackTimeUpdateHandler
             }
         }
     }, [])
@@ -615,6 +812,7 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
     useEffect(() => {
         if (landmarks.length > 0 && !isProcessing) {
             onLandmarksExtracted(landmarks)
+            // Audio extraction is now handled in processVideo after processing completes
         }
     }, [landmarks, isProcessing, onLandmarksExtracted])
 
@@ -632,7 +830,7 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                         Initializing MediaPipe Face Landmarker...
                     </div>
                 )}
-                {!videoFile ? (
+                {!currentVideoFile ? (
                     <div className="border-2 border-dashed rounded-lg p-8 text-center">
                         <input
                             type="file"
@@ -652,11 +850,11 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                             </span>
                         </label>
                     </div>
-                ) : (
+                ) : currentVideoFile && (
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium">{videoFile.name}</span>
+                                <span className="text-sm font-medium">{currentVideoFile.name}</span>
                                 <Button
                                     type="button"
                                     variant="ghost"
@@ -666,8 +864,25 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                                         setLandmarks([])
                                         setProgress(0)
                                         setCurrentFrame(0)
+                                        setIsPlaying(false)
                                         if (videoRef.current) {
+                                            videoRef.current.pause()
                                             videoRef.current.src = ""
+                                        }
+                                        // Clean up animation frame
+                                        if (animationFrameRef.current) {
+                                            cancelAnimationFrame(animationFrameRef.current)
+                                            animationFrameRef.current = null
+                                        }
+                                        // Clean up timeupdate listener
+                                        const handler = (videoRef.current as any)?._playbackTimeUpdateHandler
+                                        if (handler && videoRef.current) {
+                                            videoRef.current.removeEventListener("timeupdate", handler)
+                                            delete (videoRef.current as any)._playbackTimeUpdateHandler
+                                        }
+                                        // Notify parent to clear all related data
+                                        if (onFileRemoved) {
+                                            onFileRemoved()
                                         }
                                     }}
                                 >
@@ -675,22 +890,22 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                                 </Button>
                             </div>
                             <div className="flex items-center gap-2">
-                                <Button
-                                    type="button"
-                                    onClick={togglePlayPause}
-                                    disabled={isProcessing || !isInitialized}
-                                    size="sm"
-                                >
-                                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                                </Button>
-                                <Button
-                                    type="button"
-                                    onClick={processVideo}
-                                    disabled={isProcessing || !isInitialized}
-                                    size="sm"
-                                >
-                                    {isProcessing ? "Processing..." : "Process Video"}
-                                </Button>
+                               <Button
+                                   type="button"
+                                   onClick={togglePlayPause}
+                                   disabled={isProcessing || !isInitialized || !currentVideoFile}
+                                   size="sm"
+                               >
+                                   {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                               </Button>
+                               <Button
+                                   type="button"
+                                   onClick={processVideo}
+                                   disabled={isProcessing || !isInitialized || !currentVideoFile}
+                                   size="sm"
+                               >
+                                   {isProcessing ? "Processing..." : "Process Video"}
+                               </Button>
                             </div>
                         </div>
 
@@ -737,6 +952,9 @@ export function VideoProcessor({ onLandmarksExtracted, onError }: VideoProcessor
                                 className="w-full rounded-lg"
                                 style={{ display: "none" }}
                                 playsInline
+                                preload="auto"
+                                muted
+                                crossOrigin="anonymous"
                             />
                             <canvas
                                 ref={canvasRef}
