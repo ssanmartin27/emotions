@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { FilesetResolver, FaceLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision"
-import { calculateAUs } from "~/utils/mediapipe-aus"
+// Removed AU calculation - using blendshapes directly
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -12,22 +12,9 @@ import { toast } from "sonner"
 export interface LandmarkData {
     frame: number
     timestamp: number
-    faceLandmarks: number[]
-    poseLandmarks: number[] // Will be empty for now, pose detection can be added separately if needed
-    aus: {
-        AU01: number
-        AU02: number
-        AU04: number
-        AU05: number
-        AU06: number
-        AU07: number
-        AU12: number
-        AU14: number
-        AU15: number
-        AU17: number
-        AU20: number
-        AU25: number
-    }
+    faceBlendshapes: number[] // 52 blendshape coefficients
+    headPose: number[] // 3 values: [rx (roll), ry (pitch), rz (yaw)]
+    poseLandmarks: number[] // 99 values: 33 landmarks × 3 coordinates (x, y, z)
 }
 
 interface VideoProcessorProps {
@@ -86,13 +73,14 @@ export function VideoProcessor({ onLandmarksExtracted, onError, onAudioExtracted
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
                 )
 
-                // Initialize Face Landmarker
+                // Initialize Face Landmarker with blendshapes and transformation matrix
                 const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: {
                         modelAssetPath: "/models/face_landmarker.task",
                         delegate: "GPU",
                     },
                     outputFaceBlendshapes: true,
+                    outputFacialTransformationMatrixes: true,
                     runningMode: "VIDEO" as const,
                     numFaces: 1,
                     minFaceDetectionConfidence: 0.5,
@@ -394,12 +382,11 @@ export function VideoProcessor({ onLandmarksExtracted, onError, onAudioExtracted
                     detected: true,
                 })
 
-                // Store pose landmarks
+                // Store pose landmarks (only x, y, z - 99 values: 33 × 3)
                 poseLandmarksArray = poseLandmarks.flatMap((lm) => [
                     lm.x,
                     lm.y,
-                    lm.z || 0,
-                    lm.visibility || 0
+                    lm.z || 0
                 ])
             } else {
                 // Debug logging disabled for performance
@@ -413,40 +400,73 @@ export function VideoProcessor({ onLandmarksExtracted, onError, onAudioExtracted
                 })
             }
 
-            // Process face landmarks
-            let faceLandmarksArray: { x: number; y: number; z: number }[] = []
-            let aus = {
-                AU01: 0, AU02: 0, AU04: 0, AU05: 0, AU06: 0, AU07: 0,
-                AU12: 0, AU14: 0, AU15: 0, AU17: 0, AU20: 0, AU25: 0,
-            }
-            let faceLandmarksFlat: number[] = []
+            // Process face features
+            let faceBlendshapes: number[] = new Array(52).fill(0)
+            let headPose: number[] = [0, 0, 0] // [rx, ry, rz]
 
-                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                    const faceLandmarks = results.faceLandmarks[0]
-                    // console.log(`Frame ${frameNumber}: Detected ${faceLandmarks.length} face landmarks`) // Disabled for performance
-
+            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                const faceLandmarks = results.faceLandmarks[0]
                 // Draw face landmarks on canvas
                 drawLandmarks(ctx, faceLandmarks, canvas.width, canvas.height)
 
-                // Convert to our format for AU calculation
-                faceLandmarksArray = faceLandmarks.map((lm) => ({
-                    x: lm.x * canvas.width,
-                    y: lm.y * canvas.height,
-                    z: lm.z * canvas.width, // z is normalized by width
-                }))
+                // Extract blendshapes
+                if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+                    const blendshapes = results.faceBlendshapes[0]
+                    // Ensure blendshapes is an array
+                    if (Array.isArray(blendshapes) && blendshapes.length > 0) {
+                        if (blendshapes.length >= 52) {
+                            faceBlendshapes = blendshapes.slice(0, 52).map(bs => bs?.score ?? 0)
+                        } else {
+                            // Pad to 52 if needed
+                            faceBlendshapes = blendshapes.map(bs => bs?.score ?? 0)
+                            while (faceBlendshapes.length < 52) {
+                                faceBlendshapes.push(0)
+                            }
+                        }
+                    }
+                }
 
-                // Calculate AUs from landmarks
-                aus = calculateAUs(faceLandmarksArray)
-                faceLandmarksFlat = faceLandmarks.flatMap((lm) => [lm.x, lm.y, lm.z])
+                // Extract head pose from transformation matrix
+                if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
+                    const matrix = results.facialTransformationMatrixes[0]
+                    // Extract rotation angles from 4x4 transformation matrix
+                    // Matrix format: 4x4 array
+                    if (matrix && matrix.length === 4 && matrix[0].length === 4) {
+                        // Extract rotation matrix (3x3 upper-left)
+                        const R = [
+                            [matrix[0][0], matrix[0][1], matrix[0][2]],
+                            [matrix[1][0], matrix[1][1], matrix[1][2]],
+                            [matrix[2][0], matrix[2][1], matrix[2][2]]
+                        ]
+                        
+                        // Convert rotation matrix to Euler angles (ZYX order)
+                        // MediaPipe uses: roll (rx), pitch (ry), yaw (rz)
+                        const sy = Math.sqrt(R[0][0] * R[0][0] + R[1][0] * R[1][0])
+                        const singular = sy < 1e-6
+                        
+                        let rx, ry, rz
+                        if (!singular) {
+                            rx = Math.atan2(R[2][1], R[2][2])
+                            ry = Math.atan2(-R[2][0], sy)
+                            rz = Math.atan2(R[1][0], R[0][0])
+                        } else {
+                            rx = Math.atan2(-R[1][2], R[1][1])
+                            ry = Math.atan2(-R[2][0], sy)
+                            rz = 0
+                        }
+                        
+                        headPose = [rx, ry, rz] // [roll, pitch, yaw]
+                    }
+                }
             }
 
-            // Create landmark data (even if one or both are missing)
+            // Create landmark data (even if features are missing)
             const landmarkData: LandmarkData = {
                 frame: frameNumber,
                 timestamp,
-                faceLandmarks: faceLandmarksFlat,
+                faceBlendshapes,
+                headPose,
                 poseLandmarks: poseLandmarksArray,
-                aus,
             }
 
             setLandmarks((prev) => {

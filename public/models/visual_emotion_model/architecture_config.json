@@ -1,0 +1,7 @@
+{
+  "lstm_units": 128,
+  "num_lstm_layers": 2,
+  "dense_units": 128,
+  "num_dense_layers": 2,
+  "dropout_rate": 0.4
+}
