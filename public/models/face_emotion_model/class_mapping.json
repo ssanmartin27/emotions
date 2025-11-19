@@ -1,0 +1,13 @@
+{
+  "emotions": [
+    "anger",
+    "disgust",
+    "fear",
+    "happiness",
+    "neutral",
+    "sadness",
+    "surprise"
+  ],
+  "num_classes": 7,
+  "input_dim": 1434
+}

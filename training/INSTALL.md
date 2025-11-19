@@ -1,5 +1,7 @@
 # Installation Instructions for Emotion Model Training
 
+**Note:** If you're seeing NumPy warnings on Windows (MINGW-W64 experimental build), see [NUMPY_FIX.md](./NUMPY_FIX.md) for instructions on how to fix them.
+
 Due to dependency conflicts and NumPy compatibility issues, install packages in the following order:
 
 ## Step-by-Step Installation

@@ -1,15 +1,22 @@
 # Install packages in this order to avoid dependency conflicts:
-# 1. pip install "numpy<2.0.0"  (required for tensorflowjs compatibility)
+# 1. pip install numpy (latest version 2.3.5+ works with tensorflowjs 4.x)
 # 2. pip install tensorflow
-# 3. pip install tensorflowjs
-# 4. pip install pandas scikit-learn
+# 3. pip install tensorflowjs==4.22.0 --no-deps
+# 4. pip install "flax>=0.7.2" "importlib_resources>=5.9.0" "jax>=0.4.13" "jaxlib>=0.4.13" "tf-keras>=2.13.0"
+# 5. pip install "tensorflow-hub>=0.16.1" "packaging~=23.1"
+# 6. pip install pandas scikit-learn
+#
+# Note: tensorflow-decision-forests is optional and not needed for Keras model conversion.
+# It has been made optional in tensorflowjs/converters/tf_saved_model_conversion_v2.py
 
-# Data processing - MUST install numpy first with version constraint
-numpy>=1.24.0,<2.0.0
+# Data processing - NumPy 2.x is now supported with TensorFlow.js 4.x
+numpy>=2.0.0
 
 # Core ML libraries
 tensorflow
-tensorflowjs
+tensorflowjs>=4.22.0
+tensorflow-hub>=0.16.1
+packaging~=23.1
 
 # Other data processing
 pandas

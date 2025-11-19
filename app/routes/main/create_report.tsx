@@ -9,7 +9,9 @@ import type { Id } from "convex/_generated/dataModel"
 import { toast } from "sonner"
 import { VideoProcessor, type LandmarkData } from "~/components/video-processor"
 import { AudioProcessor, type AudioProcessingData } from "~/components/audio-processor"
-import { getEmotionPredictor } from "~/utils/emotionPredictor"
+import { getEmotionPredictor, type EmotionPredictions } from "~/utils/emotionPredictor"
+import { type TemporalEmotionSegment } from "~/utils/multimodalEmotionPredictor"
+import { EmotionTimeline } from "~/components/emotion-timeline"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
@@ -17,22 +19,14 @@ import { Input } from "~/components/ui/input"
 import { Upload } from "lucide-react"
 import { cn } from "~/lib/utils"
 import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
-} from "~/components/ui/dialog"
-import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
 } from "~/components/ui/select"
-import { testQuestions, calculateTestScore, type TestQuestion } from "~/data/testQuestions"
+import { testQuestions, calculateTestScore, type TestQuestion, assessmentPhases, getTest } from "~/data/testQuestions"
+import { AssessmentForm, type AssessmentAnswer } from "~/components/assessment-form"
 
 // Memoized Emotion Card Component to prevent unnecessary re-renders
 type EmotionKey = "anger" | "sadness" | "anxiety" | "fear" | "happiness" | "guilt"
@@ -118,50 +112,77 @@ export default function CreateReportPage() {
         happiness: [0] as number[],
         guilt: [0] as number[],
     })
+    const [aiPredictions, setAiPredictions] = useState<EmotionPredictions | null>(null)
+    const [temporalSegments, setTemporalSegments] = useState<TemporalEmotionSegment[] | null>(null)
+    const [videoDuration, setVideoDuration] = useState<number>(0)
     const [audioData, setAudioData] = useState<AudioProcessingData | null>(null)
     const [videoFile, setVideoFile] = useState<File | null>(null)
     const [mediaFile, setMediaFile] = useState<File | null>(null)
-    const [testAnswers, setTestAnswers] = useState<Record<number, string>>({})
+    const [assessmentAnswers, setAssessmentAnswers] = useState<AssessmentAnswer[]>([])
     const [showTestDialog, setShowTestDialog] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
 
     const handleLandmarksExtracted = useCallback(async (extractedLandmarks: LandmarkData[]) => {
         setLandmarks(extractedLandmarks)
         
+        // Calculate video duration from landmarks
+        // Use the actual number of frames and FPS to calculate duration
+        if (extractedLandmarks.length > 0) {
+            const fps = 30 // Assume 30 FPS
+            // Duration = (number of frames) / fps
+            // Since we process frames, the duration is based on frame count
+            const estimatedDuration = extractedLandmarks.length / fps
+            setVideoDuration(estimatedDuration)
+        }
+        
         // Run emotion prediction if we have landmarks
         if (extractedLandmarks.length > 0) {
             try {
-                const predictor = getEmotionPredictor()
-                
-                // Check if model is available before trying to load
-                const modelAvailable = await predictor.isModelAvailable()
-                if (!modelAvailable) {
-                    console.log("Model not available, skipping emotion prediction")
-                    toast.info("Model not available", {
-                        description: "Creating report without AI predictions. You can manually set emotion intensities.",
-                    })
+                    // Try multimodal predictor first
+                    try {
+                        const { getMultimodalEmotionPredictor } = await import('~/utils/multimodalEmotionPredictor')
+                        const multimodalPredictor = getMultimodalEmotionPredictor()
+                        
+                        // Convert LandmarkData to MediaPipeData format
+                        const mediapipeData = extractedLandmarks.map(lm => ({
+                            frame: lm.frame,
+                            timestamp: lm.timestamp,
+                            blendshapes: lm.faceBlendshapes || [],
+                            headPose: lm.headPose || [0, 0, 0],
+                            poseLandmarks: lm.poseLandmarks || []
+                        }))
+                        
+                        // Predict using multimodal fusion
+                        // Note: fps is the third parameter, audioSequence is optional second parameter
+                        const result = await multimodalPredictor.predictFromVideo(mediapipeData, undefined, 30)
+                    
+                    // Combine with audio if available
+                    let finalPredictions = result.overall
+                    if (audioData?.emotionPredictions) {
+                        finalPredictions = multimodalPredictor.combineWithAudio(result, audioData.emotionPredictions)
+                    }
+                    
+                    // Store predictions
+                    setAiPredictions(finalPredictions)
+                    setTemporalSegments(result.segments)
+                    
+                    // Show appropriate success message based on what was used
+                    const hasAudio = audioData?.emotionPredictions && Object.values(audioData.emotionPredictions).some(v => v > 0)
+                    if (hasAudio) {
+                        toast.success("AI emotion timeline generated from multimodal analysis (visual + audio)")
+                    } else {
+                        toast.success("AI emotion timeline generated from visual analysis")
+                    }
                     return
-                }
-                
-                await predictor.loadModel()
-                
-                // Extract AUs from landmarks
-                const ausArray = extractedLandmarks.map((lm) => lm.aus)
-                
-                // Predict emotions
-                const predictions = await predictor.predictTimeSeries(ausArray)
-                
-                // Update emotion data
-                setEmotionData({
-                    anger: [predictions.anger],
-                    sadness: [predictions.sadness],
-                    anxiety: [predictions.anxiety],
-                    fear: [predictions.fear],
-                    happiness: [predictions.happiness],
-                    guilt: [predictions.guilt],
-                })
-                
-                toast.success("Emotions predicted from video analysis")
+                   } catch (multimodalError) {
+                       console.log("Multimodal predictor not available:", multimodalError)
+                       // Old predictor expects AUs which are no longer extracted
+                       // Skip emotion prediction if multimodal model isn't available
+                       toast.info("AI emotion model not available", {
+                           description: "Creating report without AI predictions. You can manually set emotion intensities.",
+                       })
+                       return
+                   }
             } catch (error) {
                 console.error("Error predicting emotions:", error)
                 toast.info("Model not available", {
@@ -169,7 +190,7 @@ export default function CreateReportPage() {
                 })
             }
         }
-    }, [])
+    }, [audioData])
 
     const handleEmotionChange = useCallback((emotion: EmotionKey, value: number) => {
         setEmotionData(prev => ({ ...prev, [emotion]: [value] }))
@@ -203,25 +224,66 @@ export default function CreateReportPage() {
         }
     }, [emotionData, audioData])
 
-    const handleTestAnswer = (questionIndex: number, answer: string) => {
-        setTestAnswers(prev => ({ ...prev, [questionIndex]: answer }))
-    }
+    const handleAssessmentComplete = useCallback((answers: AssessmentAnswer[]) => {
+        setAssessmentAnswers(answers)
+        toast.success("Evaluación completada")
+    }, [])
 
+    // Convert assessment answers to testResults format for backward compatibility
     const testResults = useMemo(() => {
-        if (Object.keys(testAnswers).length === 0) return undefined
+        if (assessmentAnswers.length === 0) return undefined
 
-        return testQuestions.map((question, index) => {
-            const answer = testAnswers[index] || ""
-            const optionIndex = question.options.indexOf(answer)
-            const score = optionIndex >= 0 ? question.weights[optionIndex] : 0
-
+        return assessmentAnswers.map(answer => {
+            const test = getTest(answer.phaseId, answer.testId)
+            const question = test?.questions[answer.questionIndex]
+            
             return {
-                question: question.question,
-                answer,
-                score,
+                question: question?.question || `Phase ${answer.phaseId}, Test ${answer.testId}, Question ${answer.questionIndex + 1}`,
+                answer: answer.answer,
+                score: answer.score,
             }
         })
-    }, [testAnswers])
+    }, [assessmentAnswers])
+
+    // Calculate completion summary
+    const assessmentSummary = useMemo(() => {
+        if (assessmentAnswers.length === 0) return null
+
+        const testCounts = new Map<string, number>()
+        assessmentPhases.forEach(phase => {
+            phase.tests.forEach(test => {
+                const key = `${phase.id}-${test.id}`
+                const count = assessmentAnswers.filter(
+                    a => a.phaseId === phase.id && a.testId === test.id
+                ).length
+                testCounts.set(key, count)
+            })
+        })
+
+        let completedTests = 0
+        let totalQuestions = 0
+        assessmentPhases.forEach(phase => {
+            phase.tests.forEach(test => {
+                const key = `${phase.id}-${test.id}`
+                const answeredCount = testCounts.get(key) || 0
+                const totalQuestionsInTest = test.questions.length
+                totalQuestions += totalQuestionsInTest
+                if (answeredCount === totalQuestionsInTest) {
+                    completedTests++
+                }
+            })
+        })
+
+        const totalTests = assessmentPhases.reduce((sum, phase) => sum + phase.tests.length, 0)
+        const answeredQuestions = assessmentAnswers.length
+
+        return {
+            completedTests,
+            totalTests,
+            answeredQuestions,
+            totalQuestions,
+        }
+    }, [assessmentAnswers])
 
     async function handleSubmit(event: FormEvent) {
         event.preventDefault()
@@ -243,9 +305,9 @@ export default function CreateReportPage() {
             const landmarksData = landmarks.length > 0 ? landmarks.map((lm) => ({
                 frame: lm.frame,
                 timestamp: lm.timestamp,
-                faceLandmarks: lm.faceLandmarks,
+                faceBlendshapes: lm.faceBlendshapes,
+                headPose: lm.headPose,
                 poseLandmarks: lm.poseLandmarks,
-                aus: lm.aus,
             })) : undefined
 
             // Create report
@@ -345,7 +407,7 @@ export default function CreateReportPage() {
     }), [])
 
     // Memoize test answers count
-    const testAnswersCount = useMemo(() => Object.keys(testAnswers).length, [testAnswers])
+    const testAnswersCount = useMemo(() => assessmentAnswers.length, [assessmentAnswers])
 
     // Memoize error handler for VideoProcessor
     const handleVideoError = useCallback((error: Error) => {
@@ -422,83 +484,48 @@ export default function CreateReportPage() {
                             </div>
                         </div>
 
-                        {/* Test Dialog */}
+                        {/* Emotion Timeline Display */}
+                        {temporalSegments && temporalSegments.length > 0 && (
+                            <div className="grid gap-3">
+                                <div>
+                                    <Label className="text-lg font-semibold">Video Emotion Timeline</Label>
+                                    <p className="text-sm text-muted-foreground mt-1">
+                                        Video segmented by dominant emotion detected. Each segment shows the primary emotion during that time period.
+                                    </p>
+                                </div>
+                                <EmotionTimeline 
+                                    segments={temporalSegments} 
+                                    totalDuration={videoDuration || (temporalSegments.length > 0 ? Math.max(...temporalSegments.map(seg => seg.endTime)) : 0)}
+                                />
+                            </div>
+                        )}
+
+                        {/* Assessment Form */}
                         <div className="grid gap-3">
                             <Label className="text-lg font-semibold">Optional Assessment Test</Label>
-                            <Dialog open={showTestDialog} onOpenChange={setShowTestDialog}>
-                                <DialogTrigger asChild>
-                                    <Button type="button" variant="default">
-                                        {testAnswersCount > 0
-                                            ? `✓ Test Completed (${testAnswersCount}/20)`
-                                            : "📋 Take Assessment Test"}
-                                    </Button>
-                                </DialogTrigger>
-                                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-                                    <DialogHeader>
-                                        <DialogTitle>Emotional Assessment Test</DialogTitle>
-                                        <DialogDescription>
-                                            Please answer the following questions. This test helps assess the child's emotional well-being.
-                                        </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="space-y-6 py-4">
-                                        {testQuestions.map((question, index) => (
-                                            <div key={index} className="space-y-2">
-                                                <Label className="text-base">
-                                                    {index + 1}. {question.question}
-                                                </Label>
-                                                <div className="space-y-2">
-                                                    {question.options.map((option) => (
-                                                        <label
-                                                            key={option}
-                                                            className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-accent"
-                                                        >
-                                                            <input
-                                                                type="radio"
-                                                                name={`question-${index}`}
-                                                                value={option}
-                                                                checked={testAnswers[index] === option}
-                                            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                                handleTestAnswer(index, e.target.value)
-                                            }
-                                                                className="cursor-pointer"
-                                                            />
-                                                            <span>{option}</span>
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <DialogFooter>
-                                        <Button
-                                            type="button"
-                                            variant="neutral"
-                                            onClick={() => setShowTestDialog(false)}
-                                        >
-                                            Cancel
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            onClick={() => {
-                                                if (testAnswersCount === testQuestions.length) {
-                                                    setShowTestDialog(false)
-                                                    toast.success("Test completed")
-                                                } else {
-                                                    toast.warning(
-                                                        `Please answer all questions (${testAnswersCount}/${testQuestions.length})`
-                                                    )
-                                                }
-                                            }}
-                                        >
-                                            Complete Test
-                                        </Button>
-                                    </DialogFooter>
-                                </DialogContent>
-                            </Dialog>
-                            {testAnswersCount > 0 && testResults && (
-                                <p className="text-sm text-muted-foreground">
-                                    Test score: {calculateTestScore(testResults)}%
-                                </p>
+                            <Button 
+                                type="button" 
+                                variant="default"
+                                onClick={() => setShowTestDialog(true)}
+                            >
+                                {assessmentSummary
+                                    ? `✓ Evaluación ${assessmentSummary.completedTests}/${assessmentSummary.totalTests} pruebas completadas`
+                                    : "📋 Tomar Evaluación"}
+                            </Button>
+                            <AssessmentForm
+                                open={showTestDialog}
+                                onOpenChange={setShowTestDialog}
+                                onComplete={handleAssessmentComplete}
+                            />
+                            {assessmentSummary && testResults && (
+                                <div className="space-y-1">
+                                    <p className="text-sm text-muted-foreground">
+                                        Preguntas respondidas: {assessmentSummary.answeredQuestions}/{assessmentSummary.totalQuestions}
+                                    </p>
+                                    <p className="text-sm text-muted-foreground">
+                                        Puntuación general: {calculateTestScore(testResults)}%
+                                    </p>
+                                </div>
                             )}
                         </div>
 
@@ -557,6 +584,9 @@ export default function CreateReportPage() {
                                         setVideoFile(null)
                                         setLandmarks([])
                                         setAudioData(null)
+                                        setAiPredictions(null)
+                                        setTemporalSegments(null)
+                                        setVideoDuration(0)
                                         setEmotionData({
                                             anger: [0],
                                             sadness: [0],

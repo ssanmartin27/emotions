@@ -14,6 +14,25 @@ export interface EmotionPredictions {
     guilt: number
 }
 
+export interface TemporalEmotionSegment {
+    startFrame: number
+    endFrame: number
+    duration: number  // in seconds (estimated)
+    predictions: EmotionPredictions
+    dominantEmotion: string
+    dominantValue: number
+}
+
+export interface TemporalEmotionPredictions {
+    segments: Array<{
+        startFrame: number
+        endFrame: number
+        dominantEmotion: keyof EmotionPredictions
+        emotions: EmotionPredictions
+    }>
+    overall: EmotionPredictions
+}
+
 export interface AUs {
     AU01: number
     AU02: number
@@ -31,9 +50,11 @@ export interface AUs {
 
 const EMOTIONS = ['anger', 'sadness', 'anxiety', 'fear', 'happiness', 'guilt'] as const
 const MODEL_PATH = '/models/emotion_model/model.json'
+const GRAPH_MODEL_PATH = '/models/emotion_model_graph/model.json'
+const SCALER_PATH = '/models/emotion_model/scaler.json'
 
 class EmotionPredictor {
-    private model: tf.LayersModel | null = null
+    private model: tf.LayersModel | tf.GraphModel | null = null
     private scaler: {
         mean: number[]
         scale: number[]
@@ -46,8 +67,12 @@ class EmotionPredictor {
      */
     async isModelAvailable(): Promise<boolean> {
         try {
-            const response = await fetch(MODEL_PATH, { method: 'HEAD' })
-            return response.ok
+            // Check graph model first, then layers model
+            const graphResponse = await fetch(GRAPH_MODEL_PATH, { method: 'HEAD' })
+            if (graphResponse.ok) return true
+            
+            const layersResponse = await fetch(MODEL_PATH, { method: 'HEAD' })
+            return layersResponse.ok
         } catch {
             return false
         }
@@ -74,17 +99,43 @@ class EmotionPredictor {
                     throw new Error('Model file not found')
                 }
 
-                // Load model
-                this.model = await tf.loadLayersModel(MODEL_PATH)
-                console.log('Emotion model loaded successfully')
+                // Try loading as graph model first (SavedModel format), fallback to layers model
+                try {
+                    this.model = await tf.loadGraphModel(GRAPH_MODEL_PATH)
+                    console.log('Emotion model loaded successfully as GraphModel')
+                } catch (graphError) {
+                    console.warn('Failed to load as GraphModel, trying LayersModel:', graphError)
+                    this.model = await tf.loadLayersModel(MODEL_PATH)
+                    console.log('Emotion model loaded successfully as LayersModel')
+                }
 
                 // Load scaler (mean and scale for normalization)
-                // In a real implementation, you'd load this from a JSON file
-                // For now, we'll use default values or calculate from training data
-                // This should match the scaler used during training
-                this.scaler = {
-                    mean: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // Should be loaded from file
-                    scale: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // Should be loaded from file
+                // This MUST match the scaler used during training!
+                try {
+                    const scalerResponse = await fetch(SCALER_PATH)
+                    if (scalerResponse.ok) {
+                        const scalerData = await scalerResponse.json()
+                        this.scaler = {
+                            mean: scalerData.mean || Array(12).fill(0),
+                            scale: scalerData.scale || Array(12).fill(1),
+                        }
+                        console.log('Scaler loaded from file:', {
+                            meanRange: [Math.min(...this.scaler.mean), Math.max(...this.scaler.mean)],
+                            scaleRange: [Math.min(...this.scaler.scale), Math.max(...this.scaler.scale)]
+                        })
+                    } else {
+                        console.warn('Scaler file not found, using default (no normalization)')
+                        this.scaler = {
+                            mean: Array(12).fill(0),
+                            scale: Array(12).fill(1),
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Error loading scaler, using default:', error)
+                    this.scaler = {
+                        mean: Array(12).fill(0),
+                        scale: Array(12).fill(1),
+                    }
                 }
 
                 this.isLoading = false
@@ -146,8 +197,16 @@ class EmotionPredictor {
         // Convert to tensor
         const input = tf.tensor2d([normalizedAUs])
 
-        // Predict
-        const prediction = this.model.predict(input) as tf.Tensor
+        // Predict - handle both GraphModel and LayersModel
+        let prediction: tf.Tensor
+        if ('predict' in this.model) {
+            // LayersModel
+            prediction = this.model.predict(input) as tf.Tensor
+        } else {
+            // GraphModel - use executeAsync
+            const output = await this.model.executeAsync(input) as tf.Tensor | tf.Tensor[]
+            prediction = Array.isArray(output) ? output[0] : output
+        }
 
         // Get predictions as array
         const predictions = await prediction.data()
@@ -168,10 +227,10 @@ class EmotionPredictor {
     }
 
     /**
-     * Predict emotions from time-series AU data
-     * Aggregates predictions across frames
+     * Predict emotions from time-series AU data with temporal segmentation
+     * Detects emotion changes and segments the video accordingly
      */
-    async predictTimeSeries(ausArray: AUs[]): Promise<EmotionPredictions> {
+    async predictTimeSeries(ausArray: AUs[]): Promise<TemporalEmotionPredictions> {
         if (ausArray.length === 0) {
             return {
                 anger: 0,
@@ -197,11 +256,20 @@ class EmotionPredictor {
         // Convert to tensor (batch_size, features)
         const input = tf.tensor2d(normalizedAUs)
 
-        // Predict for all frames
-        const predictions = this.model.predict(input) as tf.Tensor
+        // Predict for all frames - handle both GraphModel and LayersModel
+        let predictions: tf.Tensor
+        if ('predict' in this.model) {
+            // LayersModel
+            predictions = this.model.predict(input) as tf.Tensor
+        } else {
+            // GraphModel - use executeAsync
+            const output = await this.model.executeAsync(input) as tf.Tensor | tf.Tensor[]
+            predictions = Array.isArray(output) ? output[0] : output
+        }
 
         // Get predictions as array
         const predArray = await predictions.data()
+        const predShape = predictions.shape
         predictions.dispose()
         input.dispose()
 
@@ -216,14 +284,32 @@ class EmotionPredictor {
             guilt: 0,
         }
 
-        for (let i = 0; i < numFrames; i++) {
-            const offset = i * 6
-            aggregated.anger += predArray[offset + 0]
-            aggregated.sadness += predArray[offset + 1]
-            aggregated.anxiety += predArray[offset + 2]
-            aggregated.fear += predArray[offset + 3]
-            aggregated.happiness += predArray[offset + 4]
-            aggregated.guilt += predArray[offset + 5]
+        // Handle different output shapes
+        // GraphModel might return shape [batch, 6] while LayersModel returns [batch, 6]
+        // Check if predictions are in correct format
+        if (predShape.length === 2 && predShape[1] === 6) {
+            // Standard format: [batch, 6]
+            for (let i = 0; i < numFrames; i++) {
+                const offset = i * 6
+                aggregated.anger += predArray[offset + 0]
+                aggregated.sadness += predArray[offset + 1]
+                aggregated.anxiety += predArray[offset + 2]
+                aggregated.fear += predArray[offset + 3]
+                aggregated.happiness += predArray[offset + 4]
+                aggregated.guilt += predArray[offset + 5]
+            }
+        } else {
+            console.warn("Unexpected prediction shape:", predShape, "Expected: [batch, 6]")
+            // Try to handle other shapes
+            if (predArray.length >= 6) {
+                // If we have at least 6 values, use the first 6
+                aggregated.anger = predArray[0]
+                aggregated.sadness = predArray[1]
+                aggregated.anxiety = predArray[2]
+                aggregated.fear = predArray[3]
+                aggregated.happiness = predArray[4]
+                aggregated.guilt = predArray[5]
+            }
         }
 
         // Average
@@ -235,7 +321,8 @@ class EmotionPredictor {
         aggregated.guilt /= numFrames
 
         // Scale to 0-5 range (matching the UI)
-        return {
+        // Note: Model outputs are in 0-1 range (sigmoid), scale to 0-5
+        const scaled = {
             anger: Math.min(5, Math.max(0, aggregated.anger * 5)),
             sadness: Math.min(5, Math.max(0, aggregated.sadness * 5)),
             anxiety: Math.min(5, Math.max(0, aggregated.anxiety * 5)),
@@ -243,6 +330,7 @@ class EmotionPredictor {
             happiness: Math.min(5, Math.max(0, aggregated.happiness * 5)),
             guilt: Math.min(5, Math.max(0, aggregated.guilt * 5)),
         }
+        return scaled
     }
 }
 

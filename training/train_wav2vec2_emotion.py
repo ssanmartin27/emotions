@@ -7,6 +7,12 @@ Wav2Vec2 emotion recognition model training for Spanish audio
 """
 
 import os
+import warnings
+# Suppress NumPy warnings on Windows (MINGW-W64 experimental build warnings)
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+warnings.filterwarnings('ignore', message='.*Numpy built with MINGW-W64.*')
+warnings.filterwarnings('ignore', message='.*CRASHES ARE TO BE EXPECTED.*')
+
 import pandas as pd
 import numpy as np
 import librosa

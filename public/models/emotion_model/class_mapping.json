@@ -1,0 +1,12 @@
+{
+  "emotions": [
+    "happiness",
+    "surprise",
+    "disgust",
+    "fear",
+    "anger",
+    "sadness"
+  ],
+  "neutral_index": 6,
+  "num_classes": 7
+}

@@ -8,6 +8,12 @@ Improved emotion recognition model training
 """
 
 import os
+import warnings
+# Suppress NumPy warnings on Windows (MINGW-W64 experimental build warnings)
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+warnings.filterwarnings('ignore', message='.*Numpy built with MINGW-W64.*')
+warnings.filterwarnings('ignore', message='.*CRASHES ARE TO BE EXPECTED.*')
+
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -88,37 +94,68 @@ def map_aus_to_emotions(au_values, valence_label):
         'guilt': 0.0,
     }
     
-    # Improved normalization - less conservative to produce higher probabilities
-    # Happiness: High AU06 + AU12 (positive valence)
+    # Emotion mapping based on research table (Table 1 from [4])
+    # Map AUs to emotions using weighted combinations based on research values
+    
+    # Happiness (happy): AU6: 0.51, AU9: 1.0, AU12: 0, AU25: 1.0
+    # We use AU6 and AU12 (AU9 not in our set, AU25 available)
+    # Weighted: AU6*0.51 + AU12*0.0 + AU25*1.0, normalized by max expected (1.0)
+    happiness_score = (aus['AU06'] * 0.51 + aus['AU12'] * 0.0 + aus['AU25'] * 1.0) / 1.51
+    emotion_scores['happiness'] = min(1.0, happiness_score)
+    
+    # Anger (angry): AU4: 1.4, AU5: 0.8, AU6: 0.21, AU17: 0.67, AU20: 0.5
+    # Weighted combination normalized by max (1.4)
+    anger_score = (aus['AU04'] * 1.4 + aus['AU05'] * 0.8 + aus['AU06'] * 0.21 + 
+                   aus['AU17'] * 0.67 + aus['AU20'] * 0.5) / 3.58
+    emotion_scores['anger'] = min(1.0, anger_score)
+    
+    # Sadness: AU1: 0.6, AU4: 1.0, AU6: 0.5, AU9: 0.03, AU15: 0.67
+    # Weighted combination normalized by max (1.0)
+    sadness_score = (aus['AU01'] * 0.6 + aus['AU04'] * 1.0 + aus['AU06'] * 0.5 + 
+                     aus['AU15'] * 0.67) / 2.77
+    emotion_scores['sadness'] = min(1.0, sadness_score)
+    
+    # Fear: AU1: 1.0, AU2: 0.57, AU4: 1.0, AU5: 0.63, AU25: 1.0, AU26: 0.33
+    # Weighted combination (AU26 not in our set)
+    fear_score = (aus['AU01'] * 1.0 + aus['AU02'] * 0.57 + aus['AU04'] * 1.0 + 
+                  aus['AU05'] * 0.63 + aus['AU25'] * 1.0) / 4.2
+    emotion_scores['fear'] = min(1.0, fear_score)
+    
+    # Anxiety: Similar to fear but with elements of sadness and anger
+    # Combines fear-like AUs (AU1, AU2, AU4, AU5) with sadness elements (AU15, AU17)
+    anxiety_score = (aus['AU01'] * 1.0 + aus['AU02'] * 0.57 + aus['AU04'] * 0.7 + 
+                     aus['AU05'] * 0.63 + aus['AU15'] * 0.67 + aus['AU17'] * 0.5) / 4.07
+    emotion_scores['anxiety'] = min(1.0, anxiety_score)
+    
+    # Guilt: Combines sadness (AU1, AU4, AU15) with anger elements (AU17)
+    # Similar to sadness but with guilt-specific markers
+    guilt_score = (aus['AU01'] * 0.6 + aus['AU04'] * 0.8 + aus['AU15'] * 0.67 + 
+                   aus['AU17'] * 0.67) / 2.74
+    emotion_scores['guilt'] = min(1.0, guilt_score)
+    
+    # Apply valence-based weighting to reduce sparsity while keeping research-based values
     if valence_label == 'P':
-        happiness_score = (aus['AU06'] + aus['AU12']) / 2.0
-        # Less conservative: divide by 1.5 instead of 2.5
-        emotion_scores['happiness'] = min(1.0, happiness_score / 1.5)
+        # Positive: emphasize happiness, reduce negative emotions
+        emotion_scores['happiness'] = min(1.0, emotion_scores['happiness'] * 1.3)
+        emotion_scores['anger'] = emotion_scores['anger'] * 0.4
+        emotion_scores['sadness'] = emotion_scores['sadness'] * 0.4
+        emotion_scores['fear'] = emotion_scores['fear'] * 0.4
+        emotion_scores['anxiety'] = emotion_scores['anxiety'] * 0.4
+        emotion_scores['guilt'] = emotion_scores['guilt'] * 0.4
+    elif valence_label == 'N':
+        # Negative: emphasize negative emotions, reduce happiness
+        emotion_scores['happiness'] = emotion_scores['happiness'] * 0.4
+        emotion_scores['anger'] = min(1.0, emotion_scores['anger'] * 1.3)
+        emotion_scores['sadness'] = min(1.0, emotion_scores['sadness'] * 1.3)
+        emotion_scores['fear'] = min(1.0, emotion_scores['fear'] * 1.3)
+        emotion_scores['anxiety'] = min(1.0, emotion_scores['anxiety'] * 1.3)
+        emotion_scores['guilt'] = min(1.0, emotion_scores['guilt'] * 1.3)
+    # For 'M' (Mixed/Neutral): keep all emotions as calculated (no special weighting)
+    # This allows mixed emotions to be present based on actual AU values
     
-    # Anger: High AU04 + AU05 + AU07 (negative valence)
-    if valence_label == 'N':
-        anger_score = (aus['AU04'] + aus['AU05'] + aus['AU07']) / 3.0
-        emotion_scores['anger'] = min(1.0, anger_score / 1.2)  # Less conservative
-    
-    # Sadness: High AU01 + AU04 + AU15 (negative valence)
-    if valence_label == 'N':
-        sadness_score = (aus['AU01'] + aus['AU04'] + aus['AU15']) / 3.0
-        emotion_scores['sadness'] = min(1.0, sadness_score / 1.2)  # Less conservative
-    
-    # Fear: High AU01 + AU02 + AU04 + AU05 + AU20 (negative valence)
-    if valence_label == 'N':
-        fear_score = (aus['AU01'] + aus['AU02'] + aus['AU04'] + aus['AU05'] + aus['AU20']) / 5.0
-        emotion_scores['fear'] = min(1.0, fear_score / 1.0)  # Less conservative
-    
-    # Anxiety: Similar to fear but with AU17 (negative valence)
-    if valence_label == 'N':
-        anxiety_score = (aus['AU01'] + aus['AU02'] + aus['AU04'] + aus['AU05'] + aus['AU17']) / 5.0
-        emotion_scores['anxiety'] = min(1.0, anxiety_score / 1.0)  # Less conservative
-    
-    # Guilt: AU01 + AU04 + AU15 + AU17 (sadness-like, negative valence)
-    if valence_label == 'N':
-        guilt_score = (aus['AU01'] + aus['AU04'] + aus['AU15'] + aus['AU17']) / 4.0
-        emotion_scores['guilt'] = min(1.0, guilt_score / 1.2)  # Less conservative
+    # Clamp all values to [0, 1]
+    for emotion in emotion_scores:
+        emotion_scores[emotion] = max(0.0, min(1.0, emotion_scores[emotion]))
     
     return np.array([emotion_scores[e] for e in EMOTIONS])
 
@@ -162,11 +199,10 @@ def calculate_class_weights(y):
 
 def build_improved_model(input_dim, num_emotions, class_weights=None):
     """Build improved model with batch normalization and better architecture"""
+    # Use Sequential API - TensorFlow.js 3.x handles Sequential models better
     model = keras.Sequential([
-        layers.Input(shape=(input_dim,)),
-        
         # First block with batch norm
-        layers.Dense(256, use_bias=False),
+        layers.Dense(256, use_bias=False, input_shape=(input_dim,)),
         layers.BatchNormalization(),
         layers.Activation('relu'),
         layers.Dropout(0.4),
@@ -316,14 +352,16 @@ def main():
     print("Improved Emotion Recognition Model Training")
     print("=" * 60)
     
-    # Paths - adjust for your Colab setup
-    aus_dir = '/content/expression_dataset/AUs'
-    valences_dir = '/content/expression_dataset/Valences'
-    output_dir = '/content/emotion_model'
+    # Paths - use local project structure
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    aus_dir = os.path.join(project_root, 'app', 'expression_dataset', 'AUs')
+    valences_dir = os.path.join(project_root, 'app', 'expression_dataset', 'Valences')
+    output_dir = os.path.join(project_root, 'public', 'models', 'emotion_model')
     
     if not os.path.exists(aus_dir):
         print(f"\nERROR: AUs directory not found: {aus_dir}")
-        print("Please update the paths in the script.")
+        print("Please ensure the expression_dataset directory exists.")
         return
     
     print("\n" + "=" * 60)
@@ -412,7 +450,12 @@ def main():
         model.load_weights(os.path.join(output_dir, 'best_model.h5'))
         print("\n✓ Loaded best model weights")
     
-    plot_training_history(history)
+    # Plot training history (optional - comment out if running headless)
+    try:
+        plot_training_history(history)
+    except Exception as e:
+        print(f"Note: Could not display plots: {e}")
+        print("(This is normal if running without a display)")
     
     print("\n" + "=" * 60)
     print("Step 6: Evaluating model...")
@@ -447,18 +490,119 @@ def main():
         print(f"  MAE:       {m['mae']:.4f}")
         print(f"  Mean Pred: {m['mean_prediction']:.4f} (True: {m['mean_true']:.4f})")
     
-    plot_confusion_matrices(y_test, y_test_pred)
+    # Plot confusion matrices (optional - comment out if running headless)
+    try:
+        plot_confusion_matrices(y_test, y_test_pred)
+    except Exception as e:
+        print(f"Note: Could not display confusion matrices: {e}")
+        print("(This is normal if running without a display)")
     
     print("\n" + "=" * 60)
     print("Step 7: Saving model...")
     print("=" * 60)
     os.makedirs(output_dir, exist_ok=True)
     
+    # Save TensorFlow model
     model.save(os.path.join(output_dir, 'model.h5'))
     print(f"✓ Saved model: {os.path.join(output_dir, 'model.h5')}")
     
+    # Convert to TensorFlow.js
+    print("Converting to TensorFlow.js...")
     tfjs.converters.save_keras_model(model, output_dir)
-    print(f"✓ Saved TensorFlow.js model")
+    
+    # Fix model.json to ensure proper inputShape for TensorFlow.js
+    print("Fixing model.json for TensorFlow.js compatibility...")
+    model_json_path = os.path.join(output_dir, 'model.json')
+    with open(model_json_path, 'r') as f:
+        model_data = json.load(f)
+    
+    # Get layers
+    layers_list = model_data['modelTopology']['model_config']['config']['layers']
+    model_class = model_data['modelTopology']['model_config']['class_name']
+    
+    # Fix model for TensorFlow.js 4.x compatibility
+    if model_class == 'Functional':
+        # Functional models have inbound_nodes that TensorFlow.js 4.x may not handle correctly
+        # Simplify inbound_nodes to basic format
+        for layer in layers_list:
+            if 'inbound_nodes' in layer:
+                # Convert complex inbound_nodes to simple array format
+                inbound_nodes = layer['inbound_nodes']
+                if inbound_nodes and isinstance(inbound_nodes, list):
+                    # Simplify: keep only the structure TensorFlow.js expects
+                    simplified = []
+                    for node in inbound_nodes:
+                        if isinstance(node, dict) and 'args' in node:
+                            # Extract just the layer references, not the full tensor objects
+                            simplified.append([[]])  # Empty array for TensorFlow.js compatibility
+                        elif isinstance(node, list):
+                            simplified.append(node)
+                        else:
+                            simplified.append([])
+                    layer['inbound_nodes'] = simplified
+    
+    # Fix InputLayer for TensorFlow.js 4.x compatibility
+    # For Sequential models, remove InputLayer and put inputShape in first Dense layer
+    # This avoids weight loading issues in TensorFlow.js 4.x
+    if model_class == 'Sequential' and layers_list and layers_list[0]['class_name'] == 'InputLayer':
+        input_config = layers_list[0]['config']
+        
+        # Get input shape from InputLayer
+        input_shape = None
+        if 'inputShape' in input_config:
+            input_shape = input_config['inputShape']
+        elif 'batch_shape' in input_config:
+            batch_shape = input_config['batch_shape']
+            if batch_shape and len(batch_shape) == 2:
+                input_shape = [batch_shape[1]]
+        
+        if not input_shape:
+            # Try to get from build_input_shape
+            build_shape = model_data['modelTopology']['model_config']['config'].get('build_input_shape')
+            if build_shape and len(build_shape) == 2:
+                input_shape = [build_shape[1]]
+        
+        # Remove InputLayer
+        layers_list.pop(0)
+        
+        # Add inputShape to first Dense layer
+        if layers_list and layers_list[0]['class_name'] == 'Dense' and input_shape:
+            layers_list[0]['config']['inputShape'] = input_shape
+        
+        # Update build_input_shape
+        if input_shape and 'build_input_shape' in model_data['modelTopology']['model_config']['config']:
+            model_data['modelTopology']['model_config']['config']['build_input_shape'] = [None] + input_shape
+    elif layers_list and layers_list[0]['class_name'] == 'InputLayer':
+        # For Functional models, keep InputLayer but fix it
+        input_config = layers_list[0]['config']
+        
+        # Get input shape
+        input_shape = None
+        if 'inputShape' in input_config:
+            input_shape = input_config['inputShape']
+        elif 'batch_shape' in input_config:
+            batch_shape = input_config['batch_shape']
+            if batch_shape and len(batch_shape) == 2:
+                input_shape = [batch_shape[1]]
+        
+        if not input_shape:
+            build_shape = model_data['modelTopology']['model_config']['config'].get('build_input_shape')
+            if build_shape and len(build_shape) == 2:
+                input_shape = [build_shape[1]]
+        
+        # Remove ALL conflicting fields
+        input_config.pop('batch_shape', None)
+        input_config.pop('batchInputShape', None)
+        input_config.pop('batch_input_shape', None)
+        
+        # Set inputShape
+        if input_shape:
+            input_config['inputShape'] = input_shape
+    
+    # Save the fixed model.json
+    with open(model_json_path, 'w') as f:
+        json.dump(model_data, f, separators=(',', ':'))
+    print("Model.json fixed for TensorFlow.js compatibility")
     
     import pickle
     with open(os.path.join(output_dir, 'scaler.pkl'), 'wb') as f:
@@ -497,6 +641,7 @@ def main():
     
     print("\n" + "=" * 60)
     print("Training Complete!")
+    print(f"Model saved to {output_dir}")
     print("=" * 60)
 
 if __name__ == '__main__':
