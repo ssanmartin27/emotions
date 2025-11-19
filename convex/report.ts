@@ -81,6 +81,23 @@ export const createReport = mutation({
             answer: v.string(),
             score: v.number(),
         }))),
+        assessmentData: v.optional(v.array(v.object({
+            phaseId: v.string(),
+            testId: v.string(),
+            questionIndex: v.number(),
+            answer: v.string(),
+            score: v.number(),
+            textAreaValue: v.optional(v.string()),
+        }))),
+        cdiData: v.optional(v.object({
+            answers: v.array(v.object({
+                questionIndex: v.number(),
+                answer: v.union(v.literal("A"), v.literal("B"), v.literal("C"), v.null()),
+                score: v.number(),
+            })),
+            totalScore: v.number(),
+            hasDepression: v.boolean(),
+        })),
         richTextContent: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
@@ -145,6 +162,8 @@ export const createReport = mutation({
                 sentimentAnalysis: args.sentimentAnalysis,
                 combinedEmotionData: Object.keys(cleanedCombinedEmotionData).length > 0 ? cleanedCombinedEmotionData : undefined,
                 testResults: args.testResults,
+                assessmentData: args.assessmentData,
+                cdiData: args.cdiData,
                 richTextContent: args.richTextContent,
                 createdAt: now,
                 updatedAt: now,

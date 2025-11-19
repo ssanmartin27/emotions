@@ -27,6 +27,7 @@ import {
 } from "~/components/ui/select"
 import { testQuestions, calculateTestScore, type TestQuestion, assessmentPhases, getTest } from "~/data/testQuestions"
 import { AssessmentForm, type AssessmentAnswer } from "~/components/assessment-form"
+import { CDIForm, type CDIAnswer } from "~/components/cdi-form"
 
 // Memoized Emotion Card Component to prevent unnecessary re-renders
 type EmotionKey = "anger" | "sadness" | "anxiety" | "fear" | "happiness" | "guilt"
@@ -120,6 +121,10 @@ export default function CreateReportPage() {
     const [mediaFile, setMediaFile] = useState<File | null>(null)
     const [assessmentAnswers, setAssessmentAnswers] = useState<AssessmentAnswer[]>([])
     const [showTestDialog, setShowTestDialog] = useState(false)
+    const [cdiAnswers, setCdiAnswers] = useState<CDIAnswer[]>([])
+    const [cdiTotalScore, setCdiTotalScore] = useState<number | null>(null)
+    const [cdiHasDepression, setCdiHasDepression] = useState<boolean | null>(null)
+    const [showCdiDialog, setShowCdiDialog] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
 
     const handleLandmarksExtracted = useCallback(async (extractedLandmarks: LandmarkData[]) => {
@@ -227,6 +232,12 @@ export default function CreateReportPage() {
     const handleAssessmentComplete = useCallback((answers: AssessmentAnswer[]) => {
         setAssessmentAnswers(answers)
         toast.success("Evaluación completada")
+    }, [])
+
+    const handleCdiComplete = useCallback((answers: CDIAnswer[], totalScore: number, hasDepression: boolean) => {
+        setCdiAnswers(answers)
+        setCdiTotalScore(totalScore)
+        setCdiHasDepression(hasDepression)
     }, [])
 
     // Convert assessment answers to testResults format for backward compatibility
@@ -340,6 +351,12 @@ export default function CreateReportPage() {
                 } : undefined,
                 combinedEmotionData,
                 testResults,
+                assessmentData: assessmentAnswers.length > 0 ? assessmentAnswers : undefined,
+                cdiData: cdiAnswers.length > 0 ? {
+                    answers: cdiAnswers,
+                    totalScore: cdiTotalScore || 0,
+                    hasDepression: cdiHasDepression || false,
+                } : undefined,
             })
 
             toast.success("Report created successfully")
@@ -500,9 +517,28 @@ export default function CreateReportPage() {
                             </div>
                         )}
 
+                        {/* CDI Form */}
+                        <div className="grid gap-3">
+                            <Label className="text-lg font-semibold">CDI Questionnaire (Children's Depression Inventory) - Optional</Label>
+                            <Button 
+                                type="button" 
+                                variant="default"
+                                onClick={() => setShowCdiDialog(true)}
+                            >
+                                {cdiAnswers.length > 0
+                                    ? `✓ CDI Completed (Score: ${cdiTotalScore}/54${cdiHasDepression ? " - Depression present" : ""})`
+                                    : "📋 Take CDI Questionnaire"}
+                            </Button>
+                            <CDIForm
+                                open={showCdiDialog}
+                                onOpenChange={setShowCdiDialog}
+                                onComplete={handleCdiComplete}
+                            />
+                        </div>
+
                         {/* Assessment Form */}
                         <div className="grid gap-3">
-                            <Label className="text-lg font-semibold">Optional Assessment Test</Label>
+                            <Label className="text-lg font-semibold">Multi-phase Assessment - Optional</Label>
                             <Button 
                                 type="button" 
                                 variant="default"
@@ -516,6 +552,7 @@ export default function CreateReportPage() {
                                 open={showTestDialog}
                                 onOpenChange={setShowTestDialog}
                                 onComplete={handleAssessmentComplete}
+                                childAge={children?.find(c => c._id === selectedChildId)?.age}
                             />
                             {assessmentSummary && testResults && (
                                 <div className="space-y-1">

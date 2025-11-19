@@ -7,7 +7,9 @@ import {
     type AssessmentPhase, 
     type AssessmentTest,
     calculateASQAllSections,
-    type ASQZone
+    type ASQZone,
+    calculateMCHATResult,
+    type MCHATResult
 } from "~/data/testQuestions"
 import { Stepper, type StepperStep } from "~/components/ui/stepper"
 import { Button } from "~/components/ui/button"
@@ -23,6 +25,7 @@ import {
 } from "~/components/ui/sheet"
 import { ScrollArea } from "~/components/ui/scroll-area"
 import { Textarea } from "~/components/ui/textarea"
+import { Checkbox } from "~/components/ui/checkbox"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 
@@ -39,9 +42,10 @@ export interface AssessmentFormProps {
     open: boolean
     onOpenChange: (open: boolean) => void
     onComplete?: (answers: AssessmentAnswer[]) => void
+    childAge?: number // Age of the child for age-based form filtering (CBCL)
 }
 
-export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFormProps) {
+export function AssessmentForm({ open, onOpenChange, onComplete, childAge }: AssessmentFormProps) {
     const [currentPhaseId, setCurrentPhaseId] = useState<string>(assessmentPhases[0]?.id || "")
     const [currentTestId, setCurrentTestId] = useState<string>(
         assessmentPhases[0]?.tests[0]?.id || ""
@@ -50,6 +54,7 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
     const [textAreaAnswers, setTextAreaAnswers] = useState<Record<string, string>>({})
     const [skippedTests, setSkippedTests] = useState<Set<string>>(new Set())
     const [asqResults, setAsqResults] = useState<Array<{ section: string; score: number; zone: ASQZone; interpretation: string }> | null>(null)
+    const [mchatResult, setMchatResult] = useState<MCHATResult | null>(null)
 
     // Initialize current test when phase changes
     useEffect(() => {
@@ -63,13 +68,35 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
         }
     }, [currentPhaseId, currentTestId])
 
-    // Reset ASQ results when test changes
+    // Reset results when test changes
     useEffect(() => {
         setAsqResults(null)
+        setMchatResult(null)
     }, [currentTestId])
 
     const currentPhase = assessmentPhases.find(p => p.id === currentPhaseId)
-    const currentTest = currentPhase ? getTest(currentPhaseId, currentTestId) : undefined
+    const baseTest = currentPhase ? getTest(currentPhaseId, currentTestId) : undefined
+    
+    // Filter questions by age for age-based tests (CBCL, SDQ)
+    const currentTest = useMemo(() => {
+        if (!baseTest || !baseTest.ageBased || !childAge) return baseTest
+        
+        let ageRange: string | null = null
+        
+        // Determine age range based on test type
+        if (currentTestId === "cbcl") {
+            ageRange = childAge >= 1.5 && childAge <= 5 ? "1.5-5" : childAge >= 6 && childAge <= 18 ? "6-18" : null
+        } else if (currentTestId === "sdq") {
+            ageRange = childAge >= 2 && childAge <= 4 ? "2-4" : childAge >= 11 && childAge <= 17 ? "11-17" : null
+        }
+        
+        if (!ageRange) return baseTest
+        
+        return {
+            ...baseTest,
+            questions: baseTest.questions.filter(q => q.ageRange === ageRange)
+        }
+    }, [baseTest, childAge, currentTestId])
 
     // Check if a test is completed (all questions answered)
     const isTestCompleted = useCallback((phaseId: string, testId: string): boolean => {
@@ -129,6 +156,23 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
         const question = currentTest.questions[questionIndex]
         if (question?.hasTextArea && question.textAreaEnabledOn && answer !== question.textAreaEnabledOn) {
             setTextAreaAnswers(prev => {
+                const newAnswers = { ...prev }
+                delete newAnswers[key]
+                return newAnswers
+            })
+        }
+    }, [currentPhase, currentTest, currentPhaseId, currentTestId])
+
+    // Handle checkbox change (for Machover test)
+    const handleCheckboxChange = useCallback((questionIndex: number, checked: boolean) => {
+        if (!currentPhase || !currentTest) return
+
+        const key = `${currentPhaseId}-${currentTestId}-${questionIndex}`
+        // Checked = "Sí", Unchecked = remove answer
+        if (checked) {
+            setAnswers(prev => ({ ...prev, [key]: "Sí" }))
+        } else {
+            setAnswers(prev => {
                 const newAnswers = { ...prev }
                 delete newAnswers[key]
                 return newAnswers
@@ -280,6 +324,24 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
         })
     }, [currentPhaseId, currentTestId, answers, getAssessmentAnswers, onComplete])
 
+    // Handle M-CHAT test submission
+    const handleSubmitMCHAT = useCallback(() => {
+        if (currentTestId !== "mchat") return
+        
+        const result = calculateMCHATResult(currentPhaseId, currentTestId, answers)
+        if (result) {
+            setMchatResult(result)
+            
+            // Also save the answers
+            const assessmentAnswers = getAssessmentAnswers()
+            onComplete?.(assessmentAnswers)
+            
+            toast.success("Test M-CHAT guardado y calculado", {
+                description: "Los resultados se muestran a continuación",
+            })
+        }
+    }, [currentPhaseId, currentTestId, answers, getAssessmentAnswers, onComplete])
+
     // Handle form completion
     const handleComplete = useCallback(() => {
         const assessmentAnswers = getAssessmentAnswers()
@@ -356,59 +418,137 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
                                                         <h3 className="text-lg font-heading text-foreground">{sectionName}</h3>
                                                     </div>
                                                 )}
-                                                {questions.map(({ question, index }) => (
-                                                    <div key={index} className="space-y-3">
-                                                        <Label className="text-base">
-                                                            {index + 1}. {question.question}
-                                                        </Label>
-                                                        <div className="space-y-2">
-                                                            {question.options.map((option) => {
-                                                                const answerKey = `${currentPhaseId}-${currentTestId}-${index}`
-                                                                const isSelected = answers[answerKey] === option
-                                                                return (
-                                                                    <label
-                                                                        key={option}
-                                                                        className={`
-                                                                            flex items-center space-x-2 cursor-pointer p-3 rounded-base border-2 transition-all
-                                                                            ${isSelected 
-                                                                                ? "bg-main/20 border-main" 
-                                                                                : "bg-secondary-background border-border hover:bg-accent"
-                                                                            }
-                                                                        `}
-                                                                    >
-                                                                        <input
-                                                                            type="radio"
-                                                                            name={`question-${currentPhaseId}-${currentTestId}-${index}`}
-                                                                            value={option}
-                                                                            checked={isSelected}
-                                                                            onChange={(e) => handleAnswerChange(index, e.target.value)}
-                                                                            className="cursor-pointer"
+                                                {questions.map(({ question, index }) => {
+                                                    const answerKey = `${currentPhaseId}-${currentTestId}-${index}`
+                                                    const isChecked = answers[answerKey] === "Sí"
+                                                    const hasInterpretation = !!question.interpretation
+                                                    
+                                                    return (
+                                                        <div key={index} className="space-y-3">
+                                                            {hasInterpretation ? (
+                                                                <>
+                                                                    <div className="flex items-start space-x-3">
+                                                                        <Checkbox
+                                                                            id={`checkbox-${currentPhaseId}-${currentTestId}-${index}`}
+                                                                            checked={isChecked}
+                                                                            onCheckedChange={(checked) => handleCheckboxChange(index, checked === true)}
+                                                                            className="mt-1"
                                                                         />
-                                                                        <span className="flex-1">{option}</span>
-                                                                    </label>
-                                                                )
-                                                            })}
+                                                                        <Label 
+                                                                            htmlFor={`checkbox-${currentPhaseId}-${currentTestId}-${index}`}
+                                                                            className="text-base cursor-pointer flex-1"
+                                                                        >
+                                                                            {index + 1}. {question.question}
+                                                                        </Label>
+                                                                    </div>
+                                                                    {isChecked && question.interpretation && (
+                                                                        <div className="ml-7 mt-2 p-3 bg-blue-500/10 border-2 border-blue-500 rounded-base">
+                                                                            <p className="text-sm text-foreground">
+                                                                                <strong>Interpretación:</strong> {question.interpretation}
+                                                                            </p>
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            ) : question.options.length === 0 ? (
+                                                                // Open-ended question with only text area
+                                                                <>
+                                                                    <Label className="text-base">
+                                                                        {index + 1}. {question.question}
+                                                                    </Label>
+                                                                    {question.hasTextArea && (
+                                                                        <div className="mt-3 space-y-2">
+                                                                            <Label className="text-sm text-muted-foreground">
+                                                                                {question.textAreaLabel || "Describa:"}
+                                                                            </Label>
+                                                                            <Textarea
+                                                                                value={getTextAreaAnswer(index)}
+                                                                                onChange={(e) => handleTextAreaChange(index, e.target.value)}
+                                                                                disabled={false}
+                                                                                placeholder="Escriba su respuesta aquí..."
+                                                                                className="min-h-[100px]"
+                                                                            />
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <Label className="text-base">
+                                                                        {index + 1}. {question.question}
+                                                                    </Label>
+                                                                    <div className="space-y-2">
+                                                                        {question.options.map((option) => {
+                                                                            const isSelected = answers[answerKey] === option
+                                                                            return (
+                                                                                <label
+                                                                                    key={option}
+                                                                                    className={`
+                                                                                        flex items-center space-x-2 cursor-pointer p-3 rounded-base border-2 transition-all
+                                                                                        ${isSelected 
+                                                                                            ? "bg-main/20 border-main" 
+                                                                                            : "bg-secondary-background border-border hover:bg-accent"
+                                                                                        }
+                                                                                    `}
+                                                                                >
+                                                                                    <input
+                                                                                        type="radio"
+                                                                                        name={`question-${currentPhaseId}-${currentTestId}-${index}`}
+                                                                                        value={option}
+                                                                                        checked={isSelected}
+                                                                                        onChange={(e) => handleAnswerChange(index, e.target.value)}
+                                                                                        className="cursor-pointer"
+                                                                                    />
+                                                                                    <span className="flex-1">{option}</span>
+                                                                                </label>
+                                                                            )
+                                                                        })}
+                                                                    </div>
+                                                                    {question.hasTextArea && (
+                                                                        <div className="mt-3 space-y-2">
+                                                                            <Label className="text-sm text-muted-foreground">
+                                                                                {question.textAreaLabel || "Explique:"}
+                                                                            </Label>
+                                                                            <Textarea
+                                                                                value={getTextAreaAnswer(index)}
+                                                                                onChange={(e) => handleTextAreaChange(index, e.target.value)}
+                                                                                disabled={
+                                                                                    question.textAreaEnabledOnScore === false
+                                                                                        ? false // Always enabled if textAreaEnabledOnScore is explicitly false
+                                                                                        : question.textAreaEnabledOnScore === true
+                                                                                        ? (() => {
+                                                                                            const answer = getAnswer(index)
+                                                                                            const optionIndex = question.options.indexOf(answer)
+                                                                                            const score = optionIndex >= 0 ? question.weights[optionIndex] : 0
+                                                                                            return score === 0
+                                                                                        })()
+                                                                                        : (!question.textAreaEnabledOn || getAnswer(index) !== question.textAreaEnabledOn)
+                                                                                }
+                                                                                placeholder={
+                                                                                    question.textAreaEnabledOnScore === false
+                                                                                        ? "Escriba su respuesta aquí..."
+                                                                                        : question.textAreaEnabledOnScore === true
+                                                                                        ? (() => {
+                                                                                            const answer = getAnswer(index)
+                                                                                            const optionIndex = question.options.indexOf(answer)
+                                                                                            const score = optionIndex >= 0 ? question.weights[optionIndex] : 0
+                                                                                            return score > 0 
+                                                                                                ? "Escriba su explicación aquí..." 
+                                                                                                : "Seleccione una opción mayor a 0 para habilitar"
+                                                                                        })()
+                                                                                        : (question.textAreaEnabledOn && getAnswer(index) === question.textAreaEnabledOn
+                                                                                            ? "Escriba su explicación aquí..."
+                                                                                            : question.textAreaEnabledOn
+                                                                                            ? `Seleccione '${question.textAreaEnabledOn}' para habilitar`
+                                                                                            : "Escriba su explicación aquí...")
+                                                                                }
+                                                                                className="min-h-[100px]"
+                                                                            />
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            )}
                                                         </div>
-                                                        {question.hasTextArea && (
-                                                            <div className="mt-3 space-y-2">
-                                                                <Label className="text-sm text-muted-foreground">
-                                                                    {question.textAreaLabel || "Explique:"}
-                                                                </Label>
-                                                                <Textarea
-                                                                    value={getTextAreaAnswer(index)}
-                                                                    onChange={(e) => handleTextAreaChange(index, e.target.value)}
-                                                                    disabled={!question.textAreaEnabledOn || getAnswer(index) !== question.textAreaEnabledOn}
-                                                                    placeholder={
-                                                                        question.textAreaEnabledOn && getAnswer(index) === question.textAreaEnabledOn
-                                                                            ? "Escriba su explicación aquí..."
-                                                                            : `Seleccione '${question.textAreaEnabledOn}' para habilitar`
-                                                                    }
-                                                                    className="min-h-[100px]"
-                                                                />
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ))}
+                                                    )
+                                                })}
                                             </div>
                                         ))
                                     })()}
@@ -468,6 +608,64 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
                                 </Card>
                             )}
 
+                            {/* M-CHAT Results */}
+                            {currentTestId === "mchat" && mchatResult && (
+                                <Card className="mt-4">
+                                    <CardHeader>
+                                        <CardTitle>Resultados del M-CHAT</CardTitle>
+                                        <CardDescription>
+                                            Evaluación de riesgo de Trastorno del Espectro Autista (TEA)
+                                        </CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="space-y-4">
+                                        <div
+                                            className={`
+                                                p-4 rounded-base border-2
+                                                ${mchatResult.result === "FAIL"
+                                                    ? "bg-red-500/20 border-red-500"
+                                                    : "bg-green-500/20 border-green-500"
+                                                }
+                                            `}
+                                        >
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h4 className="font-heading text-base">Resultado General</h4>
+                                                <span
+                                                    className={`
+                                                        px-3 py-1 rounded text-sm font-heading uppercase
+                                                        ${mchatResult.result === "FAIL"
+                                                            ? "bg-red-500 text-white"
+                                                            : "bg-green-500 text-white"
+                                                        }
+                                                    `}
+                                                >
+                                                    {mchatResult.result === "FAIL" ? "RIESGO" : "BAJO RIESGO"}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-muted-foreground mb-3">
+                                                {mchatResult.interpretation}
+                                            </p>
+                                            <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-border">
+                                                <div>
+                                                    <span className="text-xs text-muted-foreground">Fallos Totales:</span>
+                                                    <p className="text-lg font-heading">{mchatResult.totalFailures}</p>
+                                                </div>
+                                                <div>
+                                                    <span className="text-xs text-muted-foreground">Fallos Críticos:</span>
+                                                    <p className="text-lg font-heading">{mchatResult.criticalFailures}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {mchatResult.result === "FAIL" && (
+                                            <div className="p-3 bg-yellow-500/10 border-2 border-yellow-500 rounded-base">
+                                                <p className="text-sm text-foreground">
+                                                    <strong>Nota importante:</strong> No todos los niños que obtienen un resultado de riesgo en este cuestionario cumplen los criterios diagnósticos del espectro autista. Sin embargo, los niños que fallan el algoritmo deben ser evaluados más profundamente por un especialista.
+                                                </p>
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            )}
+
                             {/* Progress Summary */}
                             <div className="text-sm text-muted-foreground text-center mt-4 pb-2">
                                 Progreso: {progressSummary.completed} de {progressSummary.total} pruebas completadas
@@ -507,6 +705,15 @@ export function AssessmentForm({ open, onOpenChange, onComplete }: AssessmentFor
                                 type="button"
                                 variant="default"
                                 onClick={handleSubmitASQ}
+                            >
+                                Guardar y Calcular Resultados
+                            </Button>
+                        )}
+                        {currentTestId === "mchat" && (
+                            <Button
+                                type="button"
+                                variant="default"
+                                onClick={handleSubmitMCHAT}
                             >
                                 Guardar y Calcular Resultados
                             </Button>

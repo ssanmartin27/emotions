@@ -20,6 +20,8 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "~/components/ui/alert-dialog"
+import { AssessmentDisplay } from "~/components/assessment-display"
+import { CDIDisplay } from "~/components/cdi-display"
 import * as React from "react"
 
 export default function ReportDetailView() {
@@ -352,8 +354,28 @@ export default function ReportDetailView() {
                 </Card>
             )}
 
-            {/* Test Results */}
-            {report.testResults && report.testResults.length > 0 && (
+            {/* CDI Data */}
+            {report.cdiData && (
+                <CDIDisplay cdiData={report.cdiData as any} />
+            )}
+
+            {/* Assessment Data (Multi-phase) */}
+            {report.assessmentData && report.assessmentData.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Evaluación de Desarrollo y Comportamiento</CardTitle>
+                        <CardDescription>
+                            Resultados completos de las pruebas de evaluación realizadas
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <AssessmentDisplay assessmentData={report.assessmentData as any} />
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Test Results (Legacy - for backward compatibility) */}
+            {report.testResults && report.testResults.length > 0 && !report.assessmentData && (
                 <Card>
                     <CardHeader>
                         <CardTitle>Test Results</CardTitle>

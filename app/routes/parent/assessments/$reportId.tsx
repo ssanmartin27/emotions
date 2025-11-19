@@ -12,6 +12,8 @@ import { Download, ArrowLeft } from "lucide-react"
 import { generatePDF } from "~/utils/pdfGenerator"
 import { TherapistName } from "~/components/therapist-name"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs"
+import { AssessmentDisplay } from "~/components/assessment-display"
+import { CDIDisplay } from "~/components/cdi-display"
 
 export default function AssessmentDetailView() {
     const { reportId } = useParams()
@@ -240,8 +242,28 @@ export default function AssessmentDetailView() {
                 </CardContent>
             </Card>
 
-            {/* Test Results */}
-            {report.testResults && report.testResults.length > 0 && (
+            {/* CDI Data */}
+            {report.cdiData && (
+                <CDIDisplay cdiData={report.cdiData as any} />
+            )}
+
+            {/* Assessment Data (Multi-phase) */}
+            {report.assessmentData && report.assessmentData.length > 0 && (
+                <Card className="w-full max-w-full">
+                    <CardHeader>
+                        <CardTitle>Evaluación de Desarrollo y Comportamiento</CardTitle>
+                        <CardDescription>
+                            Resultados completos de las pruebas de evaluación realizadas
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <AssessmentDisplay assessmentData={report.assessmentData as any} />
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Test Results (Legacy - for backward compatibility) */}
+            {report.testResults && report.testResults.length > 0 && !report.assessmentData && (
                 <Card className="w-full max-w-full">
                     <CardHeader>
                         <CardTitle>Test Results</CardTitle>
